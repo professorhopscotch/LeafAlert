@@ -1,8 +1,16 @@
 import SwiftUI
+import SwiftData
 
 /// Main landing screen with Start Patrol button and navigation to other sections.
 struct HomeView: View {
     @EnvironmentObject private var appState: AppState
+
+    @Query(
+        FetchDescriptor<DetectionLog>(
+            sortBy: [SortDescriptor(\.timestamp, order: .reverse)],
+            fetchLimit: 3
+        )
+    ) private var recentDetections: [DetectionLog]
 
     var body: some View {
         NavigationStack {
@@ -46,10 +54,60 @@ struct HomeView: View {
                     }
                 }
                 .font(.callout)
-                .padding(.bottom, 32)
+
+                recentDetectionsSection
+
+                Text(DetectionFormatting.safetyDisclaimer)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+                    .padding(.bottom, 16)
             }
             .navigationBarTitleDisplayMode(.inline)
         }
+    }
+
+    // MARK: - Recent Detections
+
+    @ViewBuilder
+    private var recentDetectionsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Recent Detections")
+                .font(.headline)
+                .padding(.horizontal)
+
+            if recentDetections.isEmpty {
+                Text("No detections yet")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+            } else {
+                ForEach(recentDetections) { log in
+                    recentDetectionRow(log)
+                }
+            }
+        }
+        .padding(.horizontal)
+    }
+
+    private func recentDetectionRow(_ log: DetectionLog) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(DetectionFormatting.plantDisplayName(log.plantType))
+                    .font(.subheadline.weight(.medium))
+                Text(DetectionFormatting.relativeTimestamp(log.timestamp))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Text("\(Int(log.confidence * 100))%")
+                .font(.subheadline.monospacedDigit())
+                .foregroundStyle(DetectionFormatting.confidenceColor(log.confidence))
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal)
     }
 }
 
