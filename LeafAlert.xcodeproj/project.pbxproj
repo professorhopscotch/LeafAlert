@@ -1,0 +1,369 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000001 /* LeafAlertApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000001; };
+		A10000002 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000002; };
+		A10000003 /* CaptureEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000003; };
+		A10000004 /* InferenceEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000004; };
+		A10000005 /* AlertEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000005; };
+		A10000006 /* DetectionLogStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000006; };
+		A10000007 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000007; };
+		A10000008 /* PatrolView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000008; };
+		A10000009 /* AROverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000009; };
+		A10000010 /* PatrolMapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000010; };
+		A10000011 /* PlantDetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000011; };
+		A10000012 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000012; };
+		A10000013 /* DetectionResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000013; };
+		A10000014 /* DetectionLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000014; };
+		A10000015 /* PlantInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000015; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A20000001 /* LeafAlertApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeafAlertApp.swift; sourceTree = "<group>"; };
+		A20000002 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
+		A20000003 /* CaptureEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureEngine.swift; sourceTree = "<group>"; };
+		A20000004 /* InferenceEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InferenceEngine.swift; sourceTree = "<group>"; };
+		A20000005 /* AlertEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlertEngine.swift; sourceTree = "<group>"; };
+		A20000006 /* DetectionLogStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetectionLogStore.swift; sourceTree = "<group>"; };
+		A20000007 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		A20000008 /* PatrolView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PatrolView.swift; sourceTree = "<group>"; };
+		A20000009 /* AROverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AROverlayView.swift; sourceTree = "<group>"; };
+		A20000010 /* PatrolMapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PatrolMapView.swift; sourceTree = "<group>"; };
+		A20000011 /* PlantDetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlantDetailView.swift; sourceTree = "<group>"; };
+		A20000012 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		A20000013 /* DetectionResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetectionResult.swift; sourceTree = "<group>"; };
+		A20000014 /* DetectionLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetectionLog.swift; sourceTree = "<group>"; };
+		A20000015 /* PlantInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlantInfo.swift; sourceTree = "<group>"; };
+		A20000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A30000001 /* LeafAlert.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LeafAlert.app; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A40000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A50000001 = {
+			isa = PBXGroup;
+			children = (
+				A50000002 /* LeafAlert */,
+				A50000009 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A50000002 /* LeafAlert */ = {
+			isa = PBXGroup;
+			children = (
+				A50000003 /* App */,
+				A50000004 /* Engines */,
+				A50000005 /* Stores */,
+				A50000006 /* Views */,
+				A50000007 /* Models */,
+				A50000008 /* Resources */,
+				A20000016 /* Info.plist */,
+			);
+			path = LeafAlert;
+			sourceTree = "<group>";
+		};
+		A50000003 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				A20000001 /* LeafAlertApp.swift */,
+				A20000002 /* AppState.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		A50000004 /* Engines */ = {
+			isa = PBXGroup;
+			children = (
+				A20000003 /* CaptureEngine.swift */,
+				A20000004 /* InferenceEngine.swift */,
+				A20000005 /* AlertEngine.swift */,
+			);
+			path = Engines;
+			sourceTree = "<group>";
+		};
+		A50000005 /* Stores */ = {
+			isa = PBXGroup;
+			children = (
+				A20000006 /* DetectionLogStore.swift */,
+			);
+			path = Stores;
+			sourceTree = "<group>";
+		};
+		A50000006 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				A20000007 /* HomeView.swift */,
+				A20000008 /* PatrolView.swift */,
+				A20000009 /* AROverlayView.swift */,
+				A20000010 /* PatrolMapView.swift */,
+				A20000011 /* PlantDetailView.swift */,
+				A20000012 /* SettingsView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		A50000007 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				A20000013 /* DetectionResult.swift */,
+				A20000014 /* DetectionLog.swift */,
+				A20000015 /* PlantInfo.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		A50000008 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				A50000010 /* MLModels */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		A50000009 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A30000001 /* LeafAlert.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A50000010 /* MLModels */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			path = MLModels;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A60000001 /* LeafAlert */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A80000003 /* Build configuration list for PBXNativeTarget "LeafAlert" */;
+			buildPhases = (
+				A70000001 /* Sources */,
+				A40000001 /* Frameworks */,
+				A90000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = LeafAlert;
+			productName = LeafAlert;
+			productReference = A30000001 /* LeafAlert.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		AA0000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					A60000001 = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = A80000001 /* Build configuration list for PBXProject "LeafAlert" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A50000001;
+			productRefGroup = A50000009 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A60000001 /* LeafAlert */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A90000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A70000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000001 /* LeafAlertApp.swift in Sources */,
+				A10000002 /* AppState.swift in Sources */,
+				A10000003 /* CaptureEngine.swift in Sources */,
+				A10000004 /* InferenceEngine.swift in Sources */,
+				A10000005 /* AlertEngine.swift in Sources */,
+				A10000006 /* DetectionLogStore.swift in Sources */,
+				A10000007 /* HomeView.swift in Sources */,
+				A10000008 /* PatrolView.swift in Sources */,
+				A10000009 /* AROverlayView.swift in Sources */,
+				A10000010 /* PatrolMapView.swift in Sources */,
+				A10000011 /* PlantDetailView.swift in Sources */,
+				A10000012 /* SettingsView.swift in Sources */,
+				A10000013 /* DetectionResult.swift in Sources */,
+				A10000014 /* DetectionLog.swift in Sources */,
+				A10000015 /* PlantInfo.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		AB0000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) DEBUG";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		AB0000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		AB0000003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = LeafAlert/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = LeafAlert;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.leafalert.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		AB0000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = LeafAlert/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = LeafAlert;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.healthcare-fitness";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.leafalert.app;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A80000001 /* Build configuration list for PBXProject "LeafAlert" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AB0000001 /* Debug */,
+				AB0000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A80000003 /* Build configuration list for PBXNativeTarget "LeafAlert" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AB0000003 /* Debug */,
+				AB0000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+	};
+	rootObject = AA0000001 /* Project object */;
+}
