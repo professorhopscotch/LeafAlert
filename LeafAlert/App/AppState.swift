@@ -27,10 +27,15 @@ final class AppState: ObservableObject {
     @AppStorage("screenDimLevel") var screenDimLevel: Double = 0.7
     @AppStorage("batterySaverEnabled") var batterySaverEnabled = false
 
+    // MARK: - Private
+
+    private var settingsCancellables = Set<AnyCancellable>()
+
     // MARK: - Init
 
     init() {
         self.hasShownDisclaimer = UserDefaults.standard.bool(forKey: "hasShownDisclaimer")
+        observeSettingsChanges()
     }
 
     // MARK: - Patrol Lifecycle
@@ -43,7 +48,11 @@ final class AppState: ObservableObject {
 
         captureEngine.onFrameCaptured = { [weak self] pixelBuffer in
             self?.inferenceEngine.classify(pixelBuffer: pixelBuffer) { result in
-                guard let self, let result else { return }
+                guard let self else { return }
+                // Signal to the capture engine that processing is done so it can send the next frame.
+                self.captureEngine.markFrameProcessingComplete()
+
+                guard let result else { return }
                 DispatchQueue.main.async {
                     self.lastDetection = result
                 }
@@ -74,5 +83,55 @@ final class AppState: ObservableObject {
         alertEngine.sensitivityThreshold = Float(sensitivityThreshold)
         alertEngine.audioAlertsEnabled = audioAlertsEnabled
         captureEngine.isBatterySaverEnabled = batterySaverEnabled
+    }
+
+    /// Watches UserDefaults for settings changes and live-syncs them to engines during an active patrol.
+    private func observeSettingsChanges() {
+        let defaults = UserDefaults.standard
+
+        defaults.publisher(for: \.sensitivityThreshold)
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] newValue in
+                guard let self, self.isPatrolling else { return }
+                self.alertEngine.sensitivityThreshold = Float(newValue)
+            }
+            .store(in: &settingsCancellables)
+
+        defaults.publisher(for: \.audioAlertsEnabled)
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] newValue in
+                guard let self, self.isPatrolling else { return }
+                self.alertEngine.audioAlertsEnabled = newValue
+            }
+            .store(in: &settingsCancellables)
+
+        defaults.publisher(for: \.batterySaverEnabled)
+            .dropFirst()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] newValue in
+                guard let self, self.isPatrolling else { return }
+                self.captureEngine.isBatterySaverEnabled = newValue
+            }
+            .store(in: &settingsCancellables)
+    }
+}
+
+// MARK: - UserDefaults KVO Key Paths
+
+/// Extends UserDefaults with `@objc dynamic` key-path accessors so Combine's
+/// `publisher(for:)` can observe the AppStorage-backed settings.
+extension UserDefaults {
+    @objc dynamic var sensitivityThreshold: Double {
+        double(forKey: "sensitivityThreshold")
+    }
+
+    @objc dynamic var audioAlertsEnabled: Bool {
+        bool(forKey: "audioAlertsEnabled")
+    }
+
+    @objc dynamic var batterySaverEnabled: Bool {
+        bool(forKey: "batterySaverEnabled")
     }
 }

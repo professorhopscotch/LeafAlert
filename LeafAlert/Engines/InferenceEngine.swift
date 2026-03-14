@@ -11,6 +11,9 @@ final class InferenceEngine: ObservableObject {
 
     @Published private(set) var isReady = false
 
+    /// Duration (in seconds) of the most recent inference call, for performance diagnostics.
+    @Published private(set) var lastInferenceTime: TimeInterval = 0
+
     // MARK: - Private Properties
 
     private var vnModel: VNCoreMLModel?
@@ -18,6 +21,11 @@ final class InferenceEngine: ObservableObject {
         label: "com.leafalert.inference",
         qos: .userInitiated
     )
+
+    /// Guards against overlapping inference calls. When true, new `classify` requests
+    /// are dropped (not queued) to prevent inference backlog.
+    /// Accessed only on `inferenceQueue`.
+    private var isProcessing = false
 
     /// Known class labels the model can output.
     static let supportedLabels = ["poison_ivy", "poison_oak", "poison_sumac", "negative"]
@@ -68,9 +76,35 @@ final class InferenceEngine: ObservableObject {
             return
         }
 
-        inferenceQueue.async {
+        inferenceQueue.async { [weak self] in
+            guard let self else {
+                completion(nil)
+                return
+            }
+
+            // Drop this request if a previous inference is still in progress.
+            guard !self.isProcessing else {
+                completion(nil)
+                return
+            }
+            self.isProcessing = true
+
+            let startTime = CFAbsoluteTimeGetCurrent()
+
+            let finishInference = {
+                let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+                DispatchQueue.main.async {
+                    self.lastInferenceTime = elapsed
+                }
+                self.inferenceQueue.async {
+                    self.isProcessing = false
+                }
+            }
+
             let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, options: [:])
             let request = VNCoreMLRequest(model: vnModel) { request, error in
+                defer { finishInference() }
+
                 guard error == nil,
                       let observations = request.results as? [VNClassificationObservation],
                       let top = observations.first,
@@ -80,10 +114,15 @@ final class InferenceEngine: ObservableObject {
                     return
                 }
 
+                // NOTE: VNClassificationObservation provides image-level classification
+                // and does not include bounding boxes, so `boundingBox` is set to `.zero`.
+                // When the model is upgraded to an object detection model that produces
+                // VNRecognizedObjectObservation results, extract the bounding box via
+                // `observation.boundingBox` (a normalized CGRect in Vision coordinates).
                 let result = DetectionResult(
                     plantType: top.identifier,
                     confidence: top.confidence,
-                    boundingBox: .zero  // Classification models don't produce bounding boxes
+                    boundingBox: .zero
                 )
                 completion(result)
             }
@@ -94,6 +133,7 @@ final class InferenceEngine: ObservableObject {
                 try handler.perform([request])
             } catch {
                 print("[InferenceEngine] Inference failed: \(error)")
+                finishInference()
                 completion(nil)
             }
         }
