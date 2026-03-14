@@ -3,19 +3,17 @@ import SwiftUI
 /// Live patrol screen. Dims the display and runs continuous detection.
 struct PatrolView: View {
     @EnvironmentObject private var appState: AppState
-    @State private var isPatrolling = false
-    @State private var lastDetection: DetectionResult?
     @State private var showAROverlay = false
-    @State private var screenDimOpacity: Double = 0.7
+    @State private var savedBrightness: CGFloat?
 
     var body: some View {
         ZStack {
             // Dimmed background during patrol
-            Color.black.opacity(isPatrolling ? screenDimOpacity : 0)
+            Color.black.opacity(appState.isPatrolling ? appState.screenDimLevel : 0)
                 .ignoresSafeArea()
 
             VStack(spacing: 24) {
-                if isPatrolling {
+                if appState.isPatrolling {
                     Spacer()
 
                     Image(systemName: "eye.fill")
@@ -26,7 +24,7 @@ struct PatrolView: View {
                         .font(.title2)
                         .foregroundStyle(.white)
 
-                    if let detection = lastDetection {
+                    if let detection = appState.lastDetection {
                         detectionBanner(detection)
                     }
 
@@ -63,22 +61,30 @@ struct PatrolView: View {
         .navigationTitle("Patrol")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(isPresented: $showAROverlay) {
-            if let detection = lastDetection {
+            if let detection = appState.lastDetection {
                 AROverlayView(detectionResult: detection)
             }
+        }
+        .onDisappear {
+            stopPatrol()
         }
     }
 
     // MARK: - Patrol Lifecycle
 
     private func startPatrol() {
-        isPatrolling = true
-        // TODO: Wire CaptureEngine + InferenceEngine + AlertEngine
+        savedBrightness = UIScreen.main.brightness
+        UIScreen.main.brightness = CGFloat(1.0 - appState.screenDimLevel)
+        appState.startPatrol()
     }
 
     private func stopPatrol() {
-        isPatrolling = false
-        // TODO: Stop engines
+        guard appState.isPatrolling else { return }
+        if let brightness = savedBrightness {
+            UIScreen.main.brightness = brightness
+            savedBrightness = nil
+        }
+        appState.stopPatrol()
     }
 
     // MARK: - Detection Banner
