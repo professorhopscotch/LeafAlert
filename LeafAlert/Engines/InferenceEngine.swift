@@ -28,7 +28,7 @@ final class InferenceEngine: ObservableObject {
     private var isProcessing = false
 
     /// Known class labels the model can output.
-    static let supportedLabels = ["poison_ivy", "poison_oak", "poison_sumac", "negative"]
+    static let supportedLabels = ["poison_ivy", "poison_oak", "poison_sumac", "safe_plants"]
 
     // MARK: - Setup
 

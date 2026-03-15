@@ -23,3 +23,13 @@ Pods/
 
 # Agent worktrees
 .claude/worktrees/
+
+# Build artifacts
+build/
+
+# ML model candidates (downloaded base models, not needed in repo)
+MLModelCandidates/
+
+# Training data (too large for git, re-downloadable via scripts)
+TrainingData/
+TrainingData_split/
