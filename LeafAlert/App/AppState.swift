@@ -2,6 +2,7 @@ import SwiftUI
 import Combine
 
 /// Top-level observable state shared across the app via EnvironmentObject.
+@MainActor
 final class AppState: ObservableObject {
 
     // MARK: - Engines
@@ -53,11 +54,11 @@ final class AppState: ObservableObject {
                 self.captureEngine.markFrameProcessingComplete()
 
                 guard let result else { return }
+                self.alertEngine.process(result)
                 DispatchQueue.main.async {
                     self.lastDetection = result
+                    self.detectionLogStore.save(result: result, imageData: nil)
                 }
-                self.alertEngine.process(result)
-                self.detectionLogStore.save(result: result, imageData: nil)
             }
         }
 

@@ -22,6 +22,7 @@
 		A10000013 /* DetectionResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000013; };
 		A10000014 /* DetectionLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000014; };
 		A10000015 /* PlantInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000015; };
+		A10000016 /* DetectionFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000017; };
 		B10000001 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B20000001; };
 		B10000002 /* Vision.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B20000002; };
 		B10000003 /* CoreML.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B20000003; };
@@ -50,6 +51,7 @@
 		A20000013 /* DetectionResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetectionResult.swift; sourceTree = "<group>"; };
 		A20000014 /* DetectionLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetectionLog.swift; sourceTree = "<group>"; };
 		A20000015 /* PlantInfo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlantInfo.swift; sourceTree = "<group>"; };
+		A20000017 /* DetectionFormatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetectionFormatting.swift; sourceTree = "<group>"; };
 		A20000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A30000001 /* LeafAlert.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LeafAlert.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B20000001 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
@@ -144,6 +146,7 @@
 				A20000010 /* PatrolMapView.swift */,
 				A20000011 /* PlantDetailView.swift */,
 				A20000012 /* SettingsView.swift */,
+				A20000017 /* DetectionFormatting.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -281,6 +284,7 @@
 				A10000013 /* DetectionResult.swift in Sources */,
 				A10000014 /* DetectionLog.swift in Sources */,
 				A10000015 /* PlantInfo.swift in Sources */,
+				A10000016 /* DetectionFormatting.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -308,7 +312,7 @@
 				);
 				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
-				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
@@ -332,7 +336,7 @@
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
-				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				SDKROOT = iphoneos;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				VALIDATE_PRODUCT = YES;

@@ -5,12 +5,11 @@ import SwiftData
 struct HomeView: View {
     @EnvironmentObject private var appState: AppState
 
-    @Query(
-        FetchDescriptor<DetectionLog>(
-            sortBy: [SortDescriptor(\.timestamp, order: .reverse)],
-            fetchLimit: 3
-        )
-    ) private var recentDetections: [DetectionLog]
+    @Query(sort: \DetectionLog.timestamp, order: .reverse) private var allDetections: [DetectionLog]
+
+    private var recentDetections: [DetectionLog] {
+        Array(allDetections.prefix(3))
+    }
 
     var body: some View {
         NavigationStack {

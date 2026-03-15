@@ -81,7 +81,9 @@ struct ARViewContainer: UIViewRepresentable {
 
     func updateUIView(_ uiView: ARView, context: Context) {
         // Remove any previously placed overlay anchor to avoid duplicates.
-        uiView.scene.anchors.removeAll { $0.name == Self.anchorName }
+        for anchor in uiView.scene.anchors where anchor.name == Self.anchorName {
+            uiView.scene.removeAnchor(anchor)
+        }
 
         let isGeneralWarning = boundingBox == .zero
         let distance = Self.overlayDistance

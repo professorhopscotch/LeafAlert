@@ -4,6 +4,7 @@ import CoreLocation
 
 /// Manages persistence of detection records via SwiftData.
 /// All data stays on-device — no sync, no upload, no network.
+@MainActor
 final class DetectionLogStore: ObservableObject {
 
     // MARK: - Properties
