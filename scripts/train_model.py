@@ -40,9 +40,10 @@ TRAIN_DIR = PROJECT_ROOT / "TrainingData_split" / "train"
 TEST_DIR = PROJECT_ROOT / "TrainingData_split" / "test"
 OUTPUT_PATH = PROJECT_ROOT / "LeafAlert" / "Resources" / "MLModels" / "PlantDetector.mlpackage"
 
-BATCH_SIZE = 16
-NUM_EPOCHS = 35       # More epochs but with early stopping
-LEARNING_RATE = 0.0005  # Lower LR to avoid overfitting
+BATCH_SIZE = 32
+NUM_EPOCHS = 40
+LEARNING_RATE = 0.001
+MIXUP_ALPHA = 0.2     # Mixup regularization
 IMAGE_SIZE = 224  # MobileNetV2 expects 224x224
 NUM_WORKERS = 0   # Safe for macOS
 
@@ -57,12 +58,11 @@ train_transforms = transforms.Compose([
     transforms.Resize((IMAGE_SIZE + 48, IMAGE_SIZE + 48)),
     transforms.RandomCrop(IMAGE_SIZE),
     transforms.RandomHorizontalFlip(),
-    transforms.RandomVerticalFlip(p=0.1),  # Occasional — phone held at odd angles
-    transforms.RandomRotation(20),
-    transforms.RandomPerspective(distortion_scale=0.2, p=0.3),
-    transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.3, hue=0.08),
-    transforms.RandomGrayscale(p=0.05),
-    transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.5)),
+    transforms.RandomVerticalFlip(p=0.05),
+    transforms.RandomRotation(15),
+    transforms.RandomPerspective(distortion_scale=0.15, p=0.2),
+    transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.2, hue=0.05),
+    transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.0)),
     transforms.ToTensor(),
     transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
     transforms.RandomErasing(p=0.15, scale=(0.02, 0.15)),  # Simulates partial occlusion
@@ -78,17 +78,22 @@ test_transforms = transforms.Compose([
 
 
 def create_model(num_classes: int) -> nn.Module:
-    """Load MobileNetV2 pretrained on ImageNet, replace classifier head."""
-    model = models.mobilenet_v2(weights=models.MobileNet_V2_Weights.IMAGENET1K_V1)
+    """Load EfficientNet-B0 pretrained on ImageNet, replace classifier head.
+
+    EfficientNet-B0 has better feature quality than MobileNetV2 for
+    fine-grained classification tasks like distinguishing similar leaves.
+    """
+    model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1)
 
     # Freeze backbone initially — only train the new classifier head
     for param in model.features.parameters():
         param.requires_grad = False
 
-    # Simple classifier head — avoid overfitting with small datasets
+    # EfficientNet-B0 classifier input is 1280
+    in_features = model.classifier[1].in_features
     model.classifier = nn.Sequential(
-        nn.Dropout(p=0.3),
-        nn.Linear(1280, num_classes),
+        nn.Dropout(p=0.4),
+        nn.Linear(in_features, num_classes),
     )
 
     return model
@@ -113,8 +118,21 @@ def compute_class_weights(dataset) -> torch.Tensor:
     return weights
 
 
-def train_one_epoch(model, dataloader, criterion, optimizer, device) -> tuple:
-    """Train for one epoch, return average loss and accuracy."""
+def mixup_data(x, y, alpha=0.2):
+    """Apply mixup augmentation: blend random pairs of images and labels."""
+    if alpha > 0:
+        lam = torch.distributions.Beta(alpha, alpha).sample().item()
+    else:
+        lam = 1.0
+    batch_size = x.size(0)
+    index = torch.randperm(batch_size, device=x.device)
+    mixed_x = lam * x + (1 - lam) * x[index]
+    y_a, y_b = y, y[index]
+    return mixed_x, y_a, y_b, lam
+
+
+def train_one_epoch(model, dataloader, criterion, optimizer, device, use_mixup=True) -> tuple:
+    """Train for one epoch with optional mixup, return average loss and accuracy."""
     model.train()
     running_loss = 0.0
     correct = 0
@@ -124,13 +142,22 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device) -> tuple:
         inputs, labels = inputs.to(device), labels.to(device)
 
         optimizer.zero_grad()
-        outputs = model(inputs)
-        loss = criterion(outputs, labels)
+
+        if use_mixup and MIXUP_ALPHA > 0:
+            mixed_inputs, y_a, y_b, lam = mixup_data(inputs, labels, MIXUP_ALPHA)
+            outputs = model(mixed_inputs)
+            loss = lam * criterion(outputs, y_a) + (1 - lam) * criterion(outputs, y_b)
+            # For accuracy tracking, use original labels
+            _, predicted = model(inputs).max(1)
+        else:
+            outputs = model(inputs)
+            loss = criterion(outputs, labels)
+            _, predicted = outputs.max(1)
+
         loss.backward()
         optimizer.step()
 
         running_loss += loss.item() * inputs.size(0)
-        _, predicted = outputs.max(1)
         total += labels.size(0)
         correct += predicted.eq(labels).sum().item()
 
@@ -292,10 +319,10 @@ def main():
     model = create_model(num_classes)
     model = model.to(device)
 
-    criterion = nn.CrossEntropyLoss(weight=class_weights)
+    criterion = nn.CrossEntropyLoss(weight=class_weights, label_smoothing=0.1)
 
-    # Phase 1: Train classifier head only (backbone frozen) — 12 epochs
-    phase1_epochs = 12
+    # Phase 1: Train classifier head only (backbone frozen) — 10 epochs
+    phase1_epochs = 10
     print(f"\n--- Phase 1: Training classifier head ({phase1_epochs} epochs) ---")
     optimizer = optim.Adam(model.classifier.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=phase1_epochs)
@@ -321,13 +348,15 @@ def main():
     for param in model.features.parameters():
         param.requires_grad = True
 
-    # Group parameters: early backbone (low LR), late backbone (medium LR), classifier (high LR)
+    # Discriminative LR: early layers barely move, late layers adapt more
+    # EfficientNet-B0 has 9 feature blocks (0-8)
     param_groups = [
-        {"params": list(model.features[:10].parameters()), "lr": LEARNING_RATE / 100},
-        {"params": list(model.features[10:].parameters()), "lr": LEARNING_RATE / 20},
-        {"params": list(model.classifier.parameters()), "lr": LEARNING_RATE / 5},
+        {"params": list(model.features[:4].parameters()), "lr": LEARNING_RATE / 50},
+        {"params": list(model.features[4:6].parameters()), "lr": LEARNING_RATE / 10},
+        {"params": list(model.features[6:].parameters()), "lr": LEARNING_RATE / 3},
+        {"params": list(model.classifier.parameters()), "lr": LEARNING_RATE},
     ]
-    optimizer = optim.Adam(param_groups, weight_decay=5e-4)
+    optimizer = optim.AdamW(param_groups, weight_decay=5e-3)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=phase2_epochs)
 
     best_acc = 0.0
