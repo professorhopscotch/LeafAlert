@@ -25,11 +25,14 @@ final class AlertEngine: ObservableObject {
     /// - Returns: The alert level that was triggered, or nil if suppressed.
     @discardableResult
     func process(_ result: DetectionResult) -> AlertLevel? {
-        // Ignore negative classifications
-        guard result.plantType != "negative" else { return nil }
+        // Only alert on toxic plant detections
+        guard InferenceEngine.toxicLabels.contains(result.plantType) else { return nil }
 
         // Below threshold — silent log only
         guard result.confidence >= sensitivityThreshold else { return nil }
+
+        // Sanity check: ignore impossible confidence values
+        guard result.confidence <= 1.0 else { return nil }
 
         // Cooldown check
         let now = Date()

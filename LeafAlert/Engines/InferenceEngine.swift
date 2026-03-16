@@ -27,8 +27,12 @@ final class InferenceEngine: ObservableObject {
     /// Accessed only on `inferenceQueue`.
     private var isProcessing = false
 
-    /// Known class labels the model can output.
-    static let supportedLabels = ["poison_ivy", "poison_oak", "poison_sumac", "safe_plants"]
+    /// Class labels the model can output that represent a toxic plant detection.
+    /// "safe_plants" is intentionally excluded — we only surface positive identifications.
+    static let toxicLabels: Set<String> = ["poison_ivy", "poison_oak", "poison_sumac"]
+
+    /// All labels the model knows (used for validation).
+    static let allLabels: Set<String> = ["poison_ivy", "poison_oak", "poison_sumac", "safe_plants"]
 
     // MARK: - Setup
 
@@ -107,21 +111,37 @@ final class InferenceEngine: ObservableObject {
 
                 guard error == nil,
                       let observations = request.results as? [VNClassificationObservation],
-                      let top = observations.first,
-                      Self.supportedLabels.contains(top.identifier)
+                      !observations.isEmpty
                 else {
                     completion(nil)
                     return
                 }
 
-                // NOTE: VNClassificationObservation provides image-level classification
-                // and does not include bounding boxes, so `boundingBox` is set to `.zero`.
-                // When the model is upgraded to an object detection model that produces
-                // VNRecognizedObjectObservation results, extract the bounding box via
-                // `observation.boundingBox` (a normalized CGRect in Vision coordinates).
+                // Find the highest-confidence *toxic* plant class.
+                // If "safe_plants" wins, we return nil (no detection).
+                guard let topToxic = observations.first(where: {
+                    Self.toxicLabels.contains($0.identifier)
+                }) else {
+                    completion(nil)
+                    return
+                }
+
+                // Only report if the toxic class actually beats safe_plants.
+                let safeConfidence = observations
+                    .first(where: { $0.identifier == "safe_plants" })?
+                    .confidence ?? 0.0
+
+                guard topToxic.confidence > safeConfidence else {
+                    completion(nil)
+                    return
+                }
+
+                // Clamp confidence to [0, 1] as a safety measure.
+                let clampedConfidence = min(max(topToxic.confidence, 0.0), 1.0)
+
                 let result = DetectionResult(
-                    plantType: top.identifier,
-                    confidence: top.confidence,
+                    plantType: topToxic.identifier,
+                    confidence: clampedConfidence,
                     boundingBox: .zero
                 )
                 completion(result)

@@ -33,3 +33,4 @@ MLModelCandidates/
 # Training data (too large for git, re-downloadable via scripts)
 TrainingData/
 TrainingData_split/
+xcuserdata/
