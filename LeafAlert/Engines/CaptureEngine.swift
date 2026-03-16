@@ -2,9 +2,18 @@ import AVFoundation
 import CoreMotion
 import Combine
 
-/// Manages camera capture sessions gated by accelerometer-based motion detection.
-/// Captures frames when the device is relatively still, and also forces periodic
-/// captures during motion so the detection pipeline never stalls completely.
+/// Manages camera capture sessions with physics-based frame timing.
+///
+/// Instead of requiring the device to be "still" (which rarely happens while hiking),
+/// we detect the **apogee** of each stride — the instant where vertical acceleration
+/// crosses zero going from upward to downward. At that moment the phone is momentarily
+/// in near-freefall relative to the hand, producing the sharpest possible frame.
+///
+/// Think of it like a ball tossed in the air: at the peak, velocity is changing direction
+/// but position is momentarily stationary. Same physics applies to a phone in a hiker's hand.
+///
+/// Accelerometer runs at 100 Hz (10 ms resolution). Camera runs at 30 fps (33 ms frames).
+/// Combined worst-case latency from apogee detection to frame capture: ~43 ms.
 final class CaptureEngine: NSObject, ObservableObject {
 
     // MARK: - Published State
@@ -19,22 +28,20 @@ final class CaptureEngine: NSObject, ObservableObject {
 
     // MARK: - Configuration
 
-    /// Acceleration magnitude threshold (in g) below which a frame is captured.
-    var motionThreshold: Double = 0.6  // Relaxed from 0.3 — hiking generates ~0.3-0.5g
-
-    /// Duration (in seconds) that motion must stay below threshold before capture.
-    var stillnessWindow: TimeInterval = 0.1  // Relaxed from 0.2 for quicker response
-
     /// Minimum interval between frame emissions regardless of motion state.
-    /// In normal mode this defaults to 0.5 seconds; battery saver mode uses `batterySaverInterval`.
     var minCaptureInterval: TimeInterval = 0.5
 
     /// Minimum interval between frame emissions when in battery-saver mode.
     var batterySaverInterval: TimeInterval = 3.0
 
     /// Maximum time (seconds) between forced captures regardless of motion state.
-    /// Prevents the pipeline from appearing frozen during continuous walking.
-    var forcedCaptureInterval: TimeInterval = 5.0
+    /// Prevents the pipeline from appearing frozen if apogee detection doesn't trigger
+    /// (e.g., phone mounted on a tripod, sitting on a table).
+    var forcedCaptureInterval: TimeInterval = 4.0
+
+    /// Net acceleration (g) below which the device is considered "still enough" to capture
+    /// even without an apogee zero-crossing. Handles the stationary-phone case.
+    var stillnessThreshold: Double = 0.08
 
     /// Whether battery saver mode is active.
     var isBatterySaverEnabled = false
@@ -51,15 +58,22 @@ final class CaptureEngine: NSObject, ObservableObject {
     private let captureQueue = DispatchQueue(label: "com.leafalert.capture", qos: .userInitiated)
     private var lastCaptureTime: Date = .distantPast
 
-    /// Thread-safe storage for stillSince. Accessed from accelerometer queue (write)
-    /// and captureQueue (read), so we use a lock to prevent data races.
-    private let stillnessLock = NSLock()
-    private var _stillSince: Date?
+    /// Thread-safe apogee flag. Set by the accelerometer queue, read by captureQueue.
+    private let motionLock = NSLock()
 
-    private var stillSince: Date? {
-        get { stillnessLock.lock(); defer { stillnessLock.unlock() }; return _stillSince }
-        set { stillnessLock.lock(); defer { stillnessLock.unlock() }; _stillSince = newValue }
+    /// True when the accelerometer has detected a zero-crossing (apogee) or stillness.
+    /// Reset to false after a frame is captured.
+    private var _captureReady = false
+
+    private var captureReady: Bool {
+        get { motionLock.lock(); defer { motionLock.unlock() }; return _captureReady }
+        set { motionLock.lock(); defer { motionLock.unlock() }; _captureReady = newValue }
     }
+
+    /// Previous net acceleration sample, used for zero-crossing detection.
+    /// "Net" means gravity subtracted: magnitude(accel) - 1g.
+    /// Positive = accelerating upward (or decelerating downward), negative = vice versa.
+    private var previousNetAccel: Double = 0.0
 
     /// Guards against sending a new frame while the previous one is still being processed.
     /// Accessed only on `captureQueue` so no additional synchronization is needed.
@@ -127,9 +141,22 @@ final class CaptureEngine: NSObject, ObservableObject {
         captureSession.commitConfiguration()
     }
 
+    /// Polls accelerometer at 100 Hz and detects apogee zero-crossings.
+    ///
+    /// The net acceleration (|a| - 1g) oscillates during walking:
+    ///   - Positive when the hand/phone accelerates upward (push-off phase)
+    ///   - Negative when it decelerates / falls (swing-through phase)
+    ///   - Zero at the peak (apogee) — the optimal capture moment
+    ///
+    /// We detect the zero-crossing from positive → negative (or near-zero → negative),
+    /// which corresponds to the top of each stride bounce.
     private func startMotionUpdates() {
-        guard motionManager.isAccelerometerAvailable else { return }
-        motionManager.accelerometerUpdateInterval = 0.05
+        guard motionManager.isAccelerometerAvailable else {
+            // No accelerometer — always allow captures (e.g., simulator)
+            captureReady = true
+            return
+        }
+        motionManager.accelerometerUpdateInterval = 0.01  // 100 Hz
         motionManager.startAccelerometerUpdates(to: .init()) { [weak self] data, _ in
             guard let self, let data else { return }
             let magnitude = sqrt(
@@ -137,15 +164,22 @@ final class CaptureEngine: NSObject, ObservableObject {
                 pow(data.acceleration.y, 2) +
                 pow(data.acceleration.z, 2)
             )
-            // Subtract ~1g for gravity
-            let netAcceleration = abs(magnitude - 1.0)
-            if netAcceleration < self.motionThreshold {
-                if self.stillSince == nil {
-                    self.stillSince = Date()
-                }
-            } else {
-                self.stillSince = nil
+            // Net acceleration: how far from pure gravity (1g).
+            // Signed: positive means total accel > 1g (pushing up), negative means < 1g (falling).
+            let netAccel = magnitude - 1.0
+
+            // Apogee detection: previous sample was positive (or near-zero), current is negative.
+            // This is the zero-crossing at the top of the bounce.
+            let isApogee = self.previousNetAccel >= 0 && netAccel < 0
+
+            // Also detect near-stillness (phone barely moving).
+            let isStill = abs(netAccel) < self.stillnessThreshold
+
+            if isApogee || isStill {
+                self.captureReady = true
             }
+
+            self.previousNetAccel = netAccel
         }
     }
 
@@ -222,11 +256,6 @@ final class CaptureEngine: NSObject, ObservableObject {
         isBatterySaverEnabled ? batterySaverInterval : minCaptureInterval
     }
 
-    private var isDeviceStill: Bool {
-        guard let stillSince else { return false }
-        return Date().timeIntervalSince(stillSince) >= stillnessWindow
-    }
-
     /// Whether enough time has passed since the last capture to force one regardless of motion.
     private var shouldForceCapture: Bool {
         Date().timeIntervalSince(lastCaptureTime) >= forcedCaptureInterval
@@ -249,8 +278,8 @@ extension CaptureEngine: AVCaptureVideoDataOutputSampleBufferDelegate {
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
-        // Allow capture if device is still OR if we've gone too long without a capture.
-        guard isDeviceStill || shouldForceCapture else { return }
+        // Capture if: apogee/stillness detected, OR forced interval elapsed.
+        guard captureReady || shouldForceCapture else { return }
         guard !isProcessingFrame else { return }
 
         let now = Date()
@@ -262,6 +291,7 @@ extension CaptureEngine: AVCaptureVideoDataOutputSampleBufferDelegate {
 
         isProcessingFrame = true
         lastCaptureTime = now
+        captureReady = false  // Reset — wait for next apogee
         frameCountInWindow += 1
         onFrameCaptured?(pixelBuffer)
     }
