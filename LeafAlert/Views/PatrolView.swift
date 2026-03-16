@@ -24,6 +24,16 @@ struct PatrolView: View {
                         .font(.title2)
                         .foregroundStyle(.white)
 
+                    // Pipeline heartbeat — shows whether camera frames are flowing
+                    HStack(spacing: 6) {
+                        Circle()
+                            .fill(appState.captureEngine.pipelineActive ? .green : .red)
+                            .frame(width: 8, height: 8)
+                        Text(appState.captureEngine.pipelineActive ? "Camera active" : "Camera paused")
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+
                     if let detection = appState.lastDetection {
                         detectionBanner(detection)
                     }

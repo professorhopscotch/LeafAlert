@@ -3,7 +3,8 @@ import CoreMotion
 import Combine
 
 /// Manages camera capture sessions gated by accelerometer-based motion detection.
-/// Only emits frames when the device is relatively still (below the motion threshold).
+/// Captures frames when the device is relatively still, and also forces periodic
+/// captures during motion so the detection pipeline never stalls completely.
 final class CaptureEngine: NSObject, ObservableObject {
 
     // MARK: - Published State
@@ -13,13 +14,16 @@ final class CaptureEngine: NSObject, ObservableObject {
     /// Number of frames captured in the current 60-second window, for UI diagnostics.
     @Published private(set) var capturesPerMinute: Int = 0
 
+    /// Whether frames are currently being captured (for UI heartbeat indicator).
+    @Published private(set) var pipelineActive = false
+
     // MARK: - Configuration
 
     /// Acceleration magnitude threshold (in g) below which a frame is captured.
-    var motionThreshold: Double = 0.3
+    var motionThreshold: Double = 0.6  // Relaxed from 0.3 — hiking generates ~0.3-0.5g
 
     /// Duration (in seconds) that motion must stay below threshold before capture.
-    var stillnessWindow: TimeInterval = 0.2
+    var stillnessWindow: TimeInterval = 0.1  // Relaxed from 0.2 for quicker response
 
     /// Minimum interval between frame emissions regardless of motion state.
     /// In normal mode this defaults to 0.5 seconds; battery saver mode uses `batterySaverInterval`.
@@ -27,6 +31,10 @@ final class CaptureEngine: NSObject, ObservableObject {
 
     /// Minimum interval between frame emissions when in battery-saver mode.
     var batterySaverInterval: TimeInterval = 3.0
+
+    /// Maximum time (seconds) between forced captures regardless of motion state.
+    /// Prevents the pipeline from appearing frozen during continuous walking.
+    var forcedCaptureInterval: TimeInterval = 5.0
 
     /// Whether battery saver mode is active.
     var isBatterySaverEnabled = false
@@ -42,7 +50,16 @@ final class CaptureEngine: NSObject, ObservableObject {
     private let motionManager = CMMotionManager()
     private let captureQueue = DispatchQueue(label: "com.leafalert.capture", qos: .userInitiated)
     private var lastCaptureTime: Date = .distantPast
-    private var stillSince: Date?
+
+    /// Thread-safe storage for stillSince. Accessed from accelerometer queue (write)
+    /// and captureQueue (read), so we use a lock to prevent data races.
+    private let stillnessLock = NSLock()
+    private var _stillSince: Date?
+
+    private var stillSince: Date? {
+        get { stillnessLock.lock(); defer { stillnessLock.unlock() }; return _stillSince }
+        set { stillnessLock.lock(); defer { stillnessLock.unlock() }; _stillSince = newValue }
+    }
 
     /// Guards against sending a new frame while the previous one is still being processed.
     /// Accessed only on `captureQueue` so no additional synchronization is needed.
@@ -62,10 +79,12 @@ final class CaptureEngine: NSObject, ObservableObject {
         configureCaptureSession()
         startMotionUpdates()
         startDiagnosticsTimer()
+        observeSessionInterruptions()
         captureQueue.async { [weak self] in
             self?.captureSession.startRunning()
         }
         isRunning = true
+        DispatchQueue.main.async { self.pipelineActive = true }
     }
 
     /// Stops camera and motion monitoring.
@@ -77,7 +96,9 @@ final class CaptureEngine: NSObject, ObservableObject {
         motionManager.stopAccelerometerUpdates()
         diagnosticsTimer?.invalidate()
         diagnosticsTimer = nil
+        removeSessionObservers()
         isRunning = false
+        DispatchQueue.main.async { self.pipelineActive = false }
     }
 
     // MARK: - Private Setup
@@ -142,6 +163,61 @@ final class CaptureEngine: NSObject, ObservableObject {
         }
     }
 
+    // MARK: - Session Interruption Handling
+
+    private func observeSessionInterruptions() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(sessionWasInterrupted),
+            name: .AVCaptureSessionWasInterrupted,
+            object: captureSession
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(sessionInterruptionEnded),
+            name: .AVCaptureSessionInterruptionEnded,
+            object: captureSession
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(sessionRuntimeError),
+            name: .AVCaptureSessionRuntimeError,
+            object: captureSession
+        )
+    }
+
+    private func removeSessionObservers() {
+        NotificationCenter.default.removeObserver(self, name: .AVCaptureSessionWasInterrupted, object: captureSession)
+        NotificationCenter.default.removeObserver(self, name: .AVCaptureSessionInterruptionEnded, object: captureSession)
+        NotificationCenter.default.removeObserver(self, name: .AVCaptureSessionRuntimeError, object: captureSession)
+    }
+
+    @objc private func sessionWasInterrupted(_ notification: Notification) {
+        print("[CaptureEngine] Session interrupted")
+        DispatchQueue.main.async { self.pipelineActive = false }
+    }
+
+    @objc private func sessionInterruptionEnded(_ notification: Notification) {
+        print("[CaptureEngine] Interruption ended — restarting session")
+        captureQueue.async { [weak self] in
+            guard let self else { return }
+            if !self.captureSession.isRunning {
+                self.captureSession.startRunning()
+            }
+        }
+        DispatchQueue.main.async { self.pipelineActive = true }
+    }
+
+    @objc private func sessionRuntimeError(_ notification: Notification) {
+        print("[CaptureEngine] Runtime error — attempting restart")
+        captureQueue.async { [weak self] in
+            guard let self else { return }
+            self.captureSession.startRunning()
+        }
+    }
+
+    // MARK: - Helpers
+
     private var effectiveCaptureInterval: TimeInterval {
         isBatterySaverEnabled ? batterySaverInterval : minCaptureInterval
     }
@@ -149,6 +225,11 @@ final class CaptureEngine: NSObject, ObservableObject {
     private var isDeviceStill: Bool {
         guard let stillSince else { return false }
         return Date().timeIntervalSince(stillSince) >= stillnessWindow
+    }
+
+    /// Whether enough time has passed since the last capture to force one regardless of motion.
+    private var shouldForceCapture: Bool {
+        Date().timeIntervalSince(lastCaptureTime) >= forcedCaptureInterval
     }
 
     /// Called by the consumer (via `onFrameCaptured`) to signal that frame processing is complete.
@@ -168,11 +249,12 @@ extension CaptureEngine: AVCaptureVideoDataOutputSampleBufferDelegate {
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
-        guard isDeviceStill else { return }
+        // Allow capture if device is still OR if we've gone too long without a capture.
+        guard isDeviceStill || shouldForceCapture else { return }
         guard !isProcessingFrame else { return }
 
         let now = Date()
-        if now.timeIntervalSince(lastCaptureTime) < effectiveCaptureInterval {
+        if !shouldForceCapture && now.timeIntervalSince(lastCaptureTime) < effectiveCaptureInterval {
             return
         }
 

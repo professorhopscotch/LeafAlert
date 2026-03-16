@@ -21,6 +21,15 @@ final class AppState: ObservableObject {
     @Published var lastDetection: DetectionResult?
     @Published var hasShownDisclaimer: Bool
 
+    /// Tracks when the last detection occurred so we can auto-expire stale banners.
+    private var lastDetectionTime: Date = .distantPast
+
+    /// How long a detection banner stays visible before auto-clearing (seconds).
+    private let detectionExpiryInterval: TimeInterval = 10.0
+
+    /// Timer that clears stale detection banners.
+    private var detectionExpiryTimer: Timer?
+
     // MARK: - Settings (synced from UserDefaults via AppStorage)
 
     @AppStorage("sensitivityThreshold") var sensitivityThreshold: Double = 0.65
@@ -57,6 +66,7 @@ final class AppState: ObservableObject {
                 self.alertEngine.process(result)
                 DispatchQueue.main.async {
                     self.lastDetection = result
+                    self.lastDetectionTime = Date()
                     self.detectionLogStore.save(result: result, imageData: nil)
                 }
             }
@@ -64,12 +74,15 @@ final class AppState: ObservableObject {
 
         captureEngine.start()
         isPatrolling = true
+        startDetectionExpiryTimer()
     }
 
     /// Stops the patrol pipeline.
     func stopPatrol() {
         captureEngine.stop()
         isPatrolling = false
+        detectionExpiryTimer?.invalidate()
+        detectionExpiryTimer = nil
     }
 
     /// Marks the first-launch disclaimer as shown.
@@ -84,6 +97,18 @@ final class AppState: ObservableObject {
         alertEngine.sensitivityThreshold = Float(sensitivityThreshold)
         alertEngine.audioAlertsEnabled = audioAlertsEnabled
         captureEngine.isBatterySaverEnabled = batterySaverEnabled
+    }
+
+    /// Periodically checks if the detection banner should auto-expire.
+    private func startDetectionExpiryTimer() {
+        detectionExpiryTimer?.invalidate()
+        detectionExpiryTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            if self.lastDetection != nil &&
+               Date().timeIntervalSince(self.lastDetectionTime) >= self.detectionExpiryInterval {
+                self.lastDetection = nil
+            }
+        }
     }
 
     /// Watches UserDefaults for settings changes and live-syncs them to engines during an active patrol.
