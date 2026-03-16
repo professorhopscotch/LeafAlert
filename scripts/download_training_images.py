@@ -31,18 +31,20 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # iNaturalist taxon IDs for our target species
+# VERIFIED 2026-03-15 against iNaturalist API
 TAXA = {
-    "poison_ivy": 58735,       # Toxicodendron radicans
-    "poison_oak": 52858,       # Toxicodendron diversilobum
-    "poison_sumac": 54767,     # Toxicodendron vernix
+    "poison_ivy": 58732,       # Toxicodendron radicans (eastern poison ivy)
+    "poison_oak": 51080,       # Toxicodendron diversilobum (Pacific poison oak)
+    "poison_sumac": 54767,     # Toxicodendron vernix (poison sumac)
 }
 
 # Safe look-alike plants (common non-toxic species hikers encounter)
+# VERIFIED 2026-03-15 against iNaturalist API
 SAFE_TAXA = {
-    "virginia_creeper": 49911,  # Parthenocissus quinquefolia (looks like poison ivy)
-    "box_elder": 49758,         # Acer negundo (looks like poison ivy)
-    "fragrant_sumac": 56600,    # Rhus aromatica (looks like poison oak)
-    "blackberry": 47578,        # Rubus spp. (common trail plant)
+    "virginia_creeper": 50278,  # Parthenocissus quinquefolia (looks like poison ivy)
+    "box_elder": 47726,         # Acer negundo (looks like poison ivy)
+    "fragrant_sumac": 58738,    # Rhus aromatica (looks like poison oak)
+    "blackberry": 82110,        # Rubus allegheniensis (common trail plant)
 }
 
 BASE_URL = "https://api.inaturalist.org/v1/observations"

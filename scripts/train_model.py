@@ -41,8 +41,8 @@ TEST_DIR = PROJECT_ROOT / "TrainingData_split" / "test"
 OUTPUT_PATH = PROJECT_ROOT / "LeafAlert" / "Resources" / "MLModels" / "PlantDetector.mlpackage"
 
 BATCH_SIZE = 16
-NUM_EPOCHS = 25
-LEARNING_RATE = 0.001
+NUM_EPOCHS = 35       # More epochs but with early stopping
+LEARNING_RATE = 0.0005  # Lower LR to avoid overfitting
 IMAGE_SIZE = 224  # MobileNetV2 expects 224x224
 NUM_WORKERS = 0   # Safe for macOS
 
@@ -85,13 +85,10 @@ def create_model(num_classes: int) -> nn.Module:
     for param in model.features.parameters():
         param.requires_grad = False
 
-    # Replace classifier with a slightly deeper head for better discrimination
+    # Simple classifier head — avoid overfitting with small datasets
     model.classifier = nn.Sequential(
         nn.Dropout(p=0.3),
-        nn.Linear(1280, 256),
-        nn.ReLU(),
-        nn.Dropout(p=0.2),
-        nn.Linear(256, num_classes),
+        nn.Linear(1280, num_classes),
     )
 
     return model
@@ -297,10 +294,10 @@ def main():
 
     criterion = nn.CrossEntropyLoss(weight=class_weights)
 
-    # Phase 1: Train classifier head only (backbone frozen) — 10 epochs
-    phase1_epochs = 10
+    # Phase 1: Train classifier head only (backbone frozen) — 12 epochs
+    phase1_epochs = 12
     print(f"\n--- Phase 1: Training classifier head ({phase1_epochs} epochs) ---")
-    optimizer = optim.Adam(model.classifier.parameters(), lr=LEARNING_RATE)
+    optimizer = optim.Adam(model.classifier.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=phase1_epochs)
 
     for epoch in range(phase1_epochs):
@@ -317,19 +314,26 @@ def main():
 
     print_per_class_accuracy(cc, ct_map, class_names)
 
-    # Phase 2: Unfreeze backbone and fine-tune everything with lower LR — 15 epochs
+    # Phase 2: Unfreeze entire backbone with discriminative learning rates
+    # Lower LR for early layers, higher for later layers
     phase2_epochs = NUM_EPOCHS - phase1_epochs
-    print(f"\n--- Phase 2: Fine-tuning full network ({phase2_epochs} epochs) ---")
+    print(f"\n--- Phase 2: Fine-tuning full network with discriminative LR ({phase2_epochs} epochs) ---")
     for param in model.features.parameters():
         param.requires_grad = True
 
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE / 10)
+    # Group parameters: early backbone (low LR), late backbone (medium LR), classifier (high LR)
+    param_groups = [
+        {"params": list(model.features[:10].parameters()), "lr": LEARNING_RATE / 100},
+        {"params": list(model.features[10:].parameters()), "lr": LEARNING_RATE / 20},
+        {"params": list(model.classifier.parameters()), "lr": LEARNING_RATE / 5},
+    ]
+    optimizer = optim.Adam(param_groups, weight_decay=5e-4)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=phase2_epochs)
 
     best_acc = 0.0
     best_state = None
     patience = 0
-    max_patience = 5
+    max_patience = 8  # Stop if no improvement for 8 epochs
 
     for epoch in range(phase2_epochs):
         train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, device)
@@ -349,6 +353,9 @@ def main():
             patience = 0
         else:
             patience += 1
+            if patience >= max_patience:
+                print(f"\n  Early stopping at epoch {phase1_epochs + epoch + 1} (no improvement for {max_patience} epochs)")
+                break
 
     # Load best model
     if best_state is not None:
