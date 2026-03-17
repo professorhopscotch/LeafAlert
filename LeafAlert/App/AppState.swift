@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import CoreImage
 
 /// Top-level observable state shared across the app via EnvironmentObject.
 @MainActor
@@ -21,15 +22,6 @@ final class AppState: ObservableObject {
     @Published var lastDetection: DetectionResult?
     @Published var hasShownDisclaimer: Bool
 
-    /// Tracks when the last detection occurred so we can auto-expire stale banners.
-    private var lastDetectionTime: Date = .distantPast
-
-    /// How long a detection banner stays visible before auto-clearing (seconds).
-    private let detectionExpiryInterval: TimeInterval = 10.0
-
-    /// Timer that clears stale detection banners.
-    private var detectionExpiryTimer: Timer?
-
     // MARK: - Settings (synced from UserDefaults via AppStorage)
 
     @AppStorage("sensitivityThreshold") var sensitivityThreshold: Double = 0.65
@@ -40,6 +32,7 @@ final class AppState: ObservableObject {
     // MARK: - Private
 
     private var settingsCancellables = Set<AnyCancellable>()
+    private let ciContext = CIContext()
 
     // MARK: - Init
 
@@ -63,26 +56,23 @@ final class AppState: ObservableObject {
                 self.captureEngine.markFrameProcessingComplete()
 
                 guard let result else { return }
+                let imageData = self.jpegData(from: pixelBuffer)
                 self.alertEngine.process(result)
                 DispatchQueue.main.async {
                     self.lastDetection = result
-                    self.lastDetectionTime = Date()
-                    self.detectionLogStore.save(result: result, imageData: nil)
+                    self.detectionLogStore.save(result: result, imageData: imageData)
                 }
             }
         }
 
         captureEngine.start()
         isPatrolling = true
-        startDetectionExpiryTimer()
     }
 
     /// Stops the patrol pipeline.
     func stopPatrol() {
         captureEngine.stop()
         isPatrolling = false
-        detectionExpiryTimer?.invalidate()
-        detectionExpiryTimer = nil
     }
 
     /// Marks the first-launch disclaimer as shown.
@@ -93,22 +83,17 @@ final class AppState: ObservableObject {
 
     // MARK: - Private
 
+    /// Converts a CVPixelBuffer to JPEG Data.
+    private func jpegData(from pixelBuffer: CVPixelBuffer) -> Data? {
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        return ciContext.jpegRepresentation(of: ciImage, colorSpace: colorSpace, options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.85])
+    }
+
     private func syncSettingsToEngines() {
         alertEngine.sensitivityThreshold = Float(sensitivityThreshold)
         alertEngine.audioAlertsEnabled = audioAlertsEnabled
         captureEngine.isBatterySaverEnabled = batterySaverEnabled
-    }
-
-    /// Periodically checks if the detection banner should auto-expire.
-    private func startDetectionExpiryTimer() {
-        detectionExpiryTimer?.invalidate()
-        detectionExpiryTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            if self.lastDetection != nil &&
-               Date().timeIntervalSince(self.lastDetectionTime) >= self.detectionExpiryInterval {
-                self.lastDetection = nil
-            }
-        }
     }
 
     /// Watches UserDefaults for settings changes and live-syncs them to engines during an active patrol.
