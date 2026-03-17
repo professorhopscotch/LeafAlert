@@ -2,18 +2,16 @@
 """
 Train a PlantDetector model for LeafAlert using transfer learning.
 
-Uses MobileNetV2 (pretrained on ImageNet) as the backbone, replaces the
-classification head with 4 classes (poison_ivy, poison_oak, poison_sumac,
-safe_plants), fine-tunes on our iNaturalist training data, and exports
-to Core ML format.
+Uses EfficientNet-B0 (pretrained on ImageNet) with CBAM spatial attention,
+dual avg+max pooling, and a bottleneck classifier head. Fine-tunes on our
+iNaturalist training data and exports to Core ML format.
 
-v2 improvements:
-  - Stronger data augmentation (perspective, erasing, gaussian blur)
-  - Learning rate scheduler (cosine annealing)
-  - More training epochs (25 total)
-  - Per-channel normalization fix in Core ML export
-  - Class-weighted loss to handle imbalanced data
-  - Confusion matrix printout for debugging
+v4 improvements:
+  - CBAM spatial attention for leaf-region focus
+  - Dual pooling (avg + max) for richer feature representation
+  - Bottleneck classifier head (2560 → 512 → 128 → 4)
+  - Stronger weight decay for Phase 1 (1e-3)
+  - Spatial attention in Phase 2 discriminative LR groups
 
 Usage:
     python3 scripts/train_model.py
@@ -44,7 +42,7 @@ BATCH_SIZE = 32
 NUM_EPOCHS = 40
 LEARNING_RATE = 0.001
 MIXUP_ALPHA = 0.2     # Mixup regularization
-IMAGE_SIZE = 224  # MobileNetV2 expects 224x224
+IMAGE_SIZE = 224  # EfficientNet-B0 expects 224x224
 NUM_WORKERS = 0   # Safe for macOS
 
 # ImageNet normalization constants
@@ -289,11 +287,11 @@ def convert_to_coreml(model, class_names: list, output_path: Path):
     mlmodel.author = "LeafAlert"
     mlmodel.short_description = (
         "Detects poison ivy, poison oak, and poison sumac from camera images. "
-        "Fine-tuned MobileNetV2 (v2) trained on iNaturalist research-grade observations. "
+        "EfficientNet-B0 with spatial attention (v4) trained on iNaturalist research-grade observations. "
         f"Classes: {', '.join(class_names)}"
     )
     mlmodel.license = "For use with LeafAlert app"
-    mlmodel.version = "2.0.0"
+    mlmodel.version = "4.0.0"
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     # Remove old model if it exists
@@ -312,7 +310,7 @@ def convert_to_coreml(model, class_names: list, output_path: Path):
 
 def main():
     print("=" * 60)
-    print("LeafAlert PlantDetector — Model Training v2")
+    print("LeafAlert PlantDetector — Model Training v4")
     print("=" * 60)
 
     # Device selection
@@ -350,7 +348,8 @@ def main():
         print(f"  {name:20s}: {label_counts.get(i, 0)} images")
 
     train_loader = DataLoader(
-        train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=NUM_WORKERS
+        train_dataset, batch_size=BATCH_SIZE, shuffle=True,
+        num_workers=NUM_WORKERS, drop_last=True,
     )
     test_loader = DataLoader(
         test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=NUM_WORKERS
@@ -361,7 +360,7 @@ def main():
     print(f"\nClass weights: {[f'{w:.2f}' for w in class_weights.tolist()]}")
 
     # Create model
-    print(f"\nLoading MobileNetV2 (pretrained on ImageNet)...")
+    print(f"\nLoading EfficientNet-B0 + spatial attention (v4)...")
     model = create_model(num_classes)
     model = model.to(device)
 
@@ -370,7 +369,9 @@ def main():
     # Phase 1: Train classifier head only (backbone frozen) — 10 epochs
     phase1_epochs = 10
     print(f"\n--- Phase 1: Training classifier head ({phase1_epochs} epochs) ---")
-    optimizer = optim.Adam(model.classifier.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
+    # Train classifier head + spatial attention (backbone frozen)
+    phase1_params = list(model.classifier.parameters()) + list(model.spatial_attn.parameters())
+    optimizer = optim.Adam(phase1_params, lr=LEARNING_RATE, weight_decay=1e-3)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=phase1_epochs)
 
     for epoch in range(phase1_epochs):
@@ -391,15 +392,16 @@ def main():
     # Lower LR for early layers, higher for later layers
     phase2_epochs = NUM_EPOCHS - phase1_epochs
     print(f"\n--- Phase 2: Fine-tuning full network with discriminative LR ({phase2_epochs} epochs) ---")
-    for param in model.features.parameters():
+    for param in model.backbone.parameters():
         param.requires_grad = True
 
     # Discriminative LR: early layers barely move, late layers adapt more
     # EfficientNet-B0 has 9 feature blocks (0-8)
     param_groups = [
-        {"params": list(model.features[:4].parameters()), "lr": LEARNING_RATE / 50},
-        {"params": list(model.features[4:6].parameters()), "lr": LEARNING_RATE / 10},
-        {"params": list(model.features[6:].parameters()), "lr": LEARNING_RATE / 3},
+        {"params": list(model.backbone[:4].parameters()), "lr": LEARNING_RATE / 50},
+        {"params": list(model.backbone[4:6].parameters()), "lr": LEARNING_RATE / 10},
+        {"params": list(model.backbone[6:].parameters()), "lr": LEARNING_RATE / 3},
+        {"params": list(model.spatial_attn.parameters()), "lr": LEARNING_RATE / 3},
         {"params": list(model.classifier.parameters()), "lr": LEARNING_RATE},
     ]
     optimizer = optim.AdamW(param_groups, weight_decay=5e-3)
@@ -449,14 +451,13 @@ def main():
     convert_to_coreml(model, class_names, OUTPUT_PATH)
 
     print(f"\n{'=' * 60}")
-    print(f"DONE! Model v2 ready at:")
+    print(f"DONE! Model v4 ready at:")
     print(f"  {OUTPUT_PATH}")
-    print(f"\nImprovements over v1:")
-    print(f"  - Stronger augmentation for real-world hiking conditions")
-    print(f"  - Deeper classifier head (1280→256→{num_classes})")
-    print(f"  - Class-weighted loss for balanced training")
-    print(f"  - Cosine annealing learning rate schedule")
-    print(f"  - {NUM_EPOCHS} total epochs (was 15)")
+    print(f"\nv4 architecture:")
+    print(f"  - EfficientNet-B0 backbone with CBAM spatial attention")
+    print(f"  - Dual pooling (avg + max) → 2560-dim feature vector")
+    print(f"  - Bottleneck classifier (2560→512→128→{num_classes})")
+    print(f"  - {NUM_EPOCHS} total epochs, label smoothing, mixup, class weights")
     print(f"\nRebuild the app to include the new model.")
     print(f"{'=' * 60}")
 
