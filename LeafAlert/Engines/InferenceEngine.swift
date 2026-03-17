@@ -67,7 +67,9 @@ final class InferenceEngine: ObservableObject {
 
     // MARK: - Inference
 
-    /// Runs inference on a pixel buffer and returns the best detection result.
+    /// Runs inference on a pixel buffer with test-time augmentation (TTA).
+    /// Averages predictions from the original and horizontally flipped image
+    /// to smooth orientation-dependent errors.
     /// - Parameters:
     ///   - pixelBuffer: A CVPixelBuffer from the camera capture pipeline.
     ///   - completion: Called on a background queue with the result, or nil on failure.
@@ -105,57 +107,96 @@ final class InferenceEngine: ObservableObject {
                 }
             }
 
-            let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, options: [:])
-            let request = VNCoreMLRequest(model: vnModel) { request, error in
-                defer { finishInference() }
+            // --- Pass 1: Original orientation ---
+            let originalHandler = VNImageRequestHandler(
+                cvPixelBuffer: pixelBuffer, options: [:]
+            )
+            let originalRequest = VNCoreMLRequest(model: vnModel)
+            originalRequest.imageCropAndScaleOption = .centerCrop
 
-                guard error == nil,
-                      let observations = request.results as? [VNClassificationObservation],
-                      !observations.isEmpty
-                else {
-                    completion(nil)
-                    return
-                }
-
-                // Find the highest-confidence *toxic* plant class.
-                // If "safe_plants" wins, we return nil (no detection).
-                guard let topToxic = observations.first(where: {
-                    Self.toxicLabels.contains($0.identifier)
-                }) else {
-                    completion(nil)
-                    return
-                }
-
-                // Only report if the toxic class actually beats safe_plants.
-                let safeConfidence = observations
-                    .first(where: { $0.identifier == "safe_plants" })?
-                    .confidence ?? 0.0
-
-                guard topToxic.confidence > safeConfidence else {
-                    completion(nil)
-                    return
-                }
-
-                // Clamp confidence to [0, 1] as a safety measure.
-                let clampedConfidence = min(max(topToxic.confidence, 0.0), 1.0)
-
-                let result = DetectionResult(
-                    plantType: topToxic.identifier,
-                    confidence: clampedConfidence,
-                    boundingBox: .zero
-                )
-                completion(result)
-            }
-
-            request.imageCropAndScaleOption = .centerCrop
+            // --- Pass 2: Horizontally flipped (zero-copy via orientation) ---
+            let flippedHandler = VNImageRequestHandler(
+                cvPixelBuffer: pixelBuffer,
+                orientation: .upMirrored,
+                options: [:]
+            )
+            let flippedRequest = VNCoreMLRequest(model: vnModel)
+            flippedRequest.imageCropAndScaleOption = .centerCrop
 
             do {
-                try handler.perform([request])
+                try originalHandler.perform([originalRequest])
+                try flippedHandler.perform([flippedRequest])
             } catch {
-                print("[InferenceEngine] Inference failed: \(error)")
+                print("[InferenceEngine] TTA inference failed: \(error)")
                 finishInference()
                 completion(nil)
+                return
             }
+
+            // Collect observations from both passes
+            guard let originalObs = originalRequest.results as? [VNClassificationObservation],
+                  let flippedObs = flippedRequest.results as? [VNClassificationObservation],
+                  !originalObs.isEmpty
+            else {
+                finishInference()
+                completion(nil)
+                return
+            }
+
+            // Average confidence values by class identifier
+            let averaged = Self.averageObservations(originalObs, flippedObs)
+
+            finishInference()
+
+            // Find the highest-confidence *toxic* plant class.
+            guard let topToxic = averaged
+                .filter({ Self.toxicLabels.contains($0.key) })
+                .max(by: { $0.value < $1.value })
+            else {
+                completion(nil)
+                return
+            }
+
+            // Only report if the toxic class beats safe_plants.
+            let safeConfidence = averaged["safe_plants"] ?? 0.0
+            guard topToxic.value > safeConfidence else {
+                completion(nil)
+                return
+            }
+
+            let clampedConfidence = min(max(topToxic.value, 0.0), 1.0)
+            let result = DetectionResult(
+                plantType: topToxic.key,
+                confidence: clampedConfidence,
+                boundingBox: .zero
+            )
+            completion(result)
         }
+    }
+
+    // MARK: - TTA Helpers
+
+    /// Averages confidence values from two sets of classification observations.
+    private static func averageObservations(
+        _ a: [VNClassificationObservation],
+        _ b: [VNClassificationObservation]
+    ) -> [String: Float] {
+        var sums: [String: Float] = [:]
+        var counts: [String: Int] = [:]
+
+        for obs in a {
+            sums[obs.identifier, default: 0] += obs.confidence
+            counts[obs.identifier, default: 0] += 1
+        }
+        for obs in b {
+            sums[obs.identifier, default: 0] += obs.confidence
+            counts[obs.identifier, default: 0] += 1
+        }
+
+        var result: [String: Float] = [:]
+        for (key, sum) in sums {
+            result[key] = sum / Float(counts[key] ?? 1)
+        }
+        return result
     }
 }
