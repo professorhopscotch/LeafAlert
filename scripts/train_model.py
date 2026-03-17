@@ -21,6 +21,7 @@ Output:
 """
 
 import os
+import random
 import sys
 from pathlib import Path
 from collections import Counter
@@ -42,6 +43,7 @@ BATCH_SIZE = 32
 NUM_EPOCHS = 40
 LEARNING_RATE = 0.001
 MIXUP_ALPHA = 0.2     # Mixup regularization
+CUTMIX_ALPHA = 1.0    # CutMix regularization
 IMAGE_SIZE = 224  # EfficientNet-B0 expects 224x224
 NUM_WORKERS = 0   # Safe for macOS
 
@@ -175,6 +177,39 @@ def mixup_data(x, y, alpha=0.2):
     return mixed_x, y_a, y_b, lam
 
 
+def cutmix_data(x, y, alpha=1.0):
+    """Apply CutMix augmentation: paste a random rectangular patch from one image onto another."""
+    if alpha > 0:
+        lam = torch.distributions.Beta(alpha, alpha).sample().item()
+    else:
+        lam = 1.0
+    batch_size = x.size(0)
+    index = torch.randperm(batch_size, device=x.device)
+
+    # Generate random bounding box
+    _, _, H, W = x.size()
+    cut_ratio = (1.0 - lam) ** 0.5
+    cut_h = int(H * cut_ratio)
+    cut_w = int(W * cut_ratio)
+
+    cy = torch.randint(0, H, (1,)).item()
+    cx = torch.randint(0, W, (1,)).item()
+
+    y1 = max(0, cy - cut_h // 2)
+    y2 = min(H, cy + cut_h // 2)
+    x1 = max(0, cx - cut_w // 2)
+    x2 = min(W, cx + cut_w // 2)
+
+    mixed_x = x.clone()
+    mixed_x[:, :, y1:y2, x1:x2] = x[index, :, y1:y2, x1:x2]
+
+    # Adjust lambda to the actual area ratio
+    lam = 1.0 - (y2 - y1) * (x2 - x1) / (H * W)
+
+    y_a, y_b = y, y[index]
+    return mixed_x, y_a, y_b, lam
+
+
 def train_one_epoch(model, dataloader, criterion, optimizer, device, use_mixup=True) -> tuple:
     """Train for one epoch with optional mixup, return average loss and accuracy."""
     model.train()
@@ -187,7 +222,15 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device, use_mixup=T
 
         optimizer.zero_grad()
 
-        if use_mixup and MIXUP_ALPHA > 0:
+        if use_mixup and random.random() < 0.5:
+            # CutMix: paste a rectangular patch from another image
+            mixed_inputs, y_a, y_b, lam = cutmix_data(inputs, labels, CUTMIX_ALPHA)
+            outputs = model(mixed_inputs)
+            loss = lam * criterion(outputs, y_a) + (1 - lam) * criterion(outputs, y_b)
+            # For accuracy tracking, use original labels
+            _, predicted = model(inputs).max(1)
+        elif use_mixup:
+            # Mixup: blend entire images
             mixed_inputs, y_a, y_b, lam = mixup_data(inputs, labels, MIXUP_ALPHA)
             outputs = model(mixed_inputs)
             loss = lam * criterion(outputs, y_a) + (1 - lam) * criterion(outputs, y_b)
@@ -457,7 +500,7 @@ def main():
     print(f"  - EfficientNet-B0 backbone with CBAM spatial attention")
     print(f"  - Dual pooling (avg + max) → 2560-dim feature vector")
     print(f"  - Bottleneck classifier (2560→512→128→{num_classes})")
-    print(f"  - {NUM_EPOCHS} total epochs, label smoothing, mixup, class weights")
+    print(f"  - {NUM_EPOCHS} total epochs, label smoothing, mixup/cutmix, class weights")
     print(f"\nRebuild the app to include the new model.")
     print(f"{'=' * 60}")
 
