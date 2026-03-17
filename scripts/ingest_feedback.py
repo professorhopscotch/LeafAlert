@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-Ingest user feedback from iCloud Drive into the training dataset.
+Ingest user feedback into the training dataset.
 
-Reads manifest.json from the iCloud Drive feedback folder, copies
-confirmed/corrected images into TrainingData_split/train/<label>/,
-and skips discarded or not_a_plant entries.
+Reads manifest.json from a feedback folder (AirDropped or copied from
+the iPhone via Files app), copies confirmed/corrected images into
+TrainingData_split/train/<label>/, and skips discarded or not_a_plant entries.
 
 Usage:
     python3 scripts/ingest_feedback.py [--feedback-dir PATH]
 
-Default feedback dir:
-    ~/Library/Mobile Documents/iCloud~com~leafalert~feedback/Documents/feedback/
+The feedback folder is exported from the app's Documents/feedback/ directory.
+Transfer it to your Mac via AirDrop, Files app, or Finder.
 """
 
 import argparse
@@ -22,15 +22,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 TRAIN_DIR = PROJECT_ROOT / "TrainingData_split" / "train"
 
-# Default iCloud Drive path on macOS
-DEFAULT_FEEDBACK_DIR = (
-    Path.home()
-    / "Library"
-    / "Mobile Documents"
-    / "iCloud~com~leafalert~feedback"
-    / "Documents"
-    / "feedback"
-)
+# Default: look in project root for an AirDropped feedback folder
+DEFAULT_FEEDBACK_DIR = PROJECT_ROOT / "feedback"
 
 # Labels that map to training classes
 VALID_LABELS = {"poison_ivy", "poison_oak", "poison_sumac", "safe_plants"}

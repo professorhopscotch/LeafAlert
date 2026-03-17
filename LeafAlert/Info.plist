@@ -33,6 +33,10 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
+	<key>UIFileSharingEnabled</key>
+	<true/>
+	<key>LSSupportsOpeningDocumentsInPlace</key>
+	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>LeafAlert needs camera access to detect toxic plants in your surroundings while hiking.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>

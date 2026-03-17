@@ -1,26 +1,34 @@
 import Foundation
 import UIKit
 
-/// Exports user feedback (confirmed/corrected detections with images) to iCloud Drive
-/// for ingestion into the training pipeline.
+/// Exports user feedback (confirmed/corrected detections with images) to the app's
+/// Documents directory for transfer to the training pipeline via AirDrop or Files app.
 ///
-/// Files are written to the app's iCloud ubiquity container at:
-///   iCloud Drive/LeafAlert/feedback/
+/// Files are written to:
+///   <App Documents>/feedback/
 ///     ├── <timestamp>_<label>_<status>.jpg
 ///     ├── manifest.json
 ///     └── ...
+///
+/// To transfer: open Files app → On My iPhone → LeafAlert → feedback/
+/// Then AirDrop or share the folder to your Mac.
 final class FeedbackExporter {
 
     static let shared = FeedbackExporter()
 
-    /// The subdirectory within the iCloud container for feedback data
     private let feedbackDirectoryName = "feedback"
 
     private init() {}
 
+    /// The local feedback directory URL.
+    var feedbackDirectoryURL: URL {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
+        return docs.appendingPathComponent(feedbackDirectoryName)
+    }
+
     // MARK: - Public API
 
-    /// Exports a single feedback entry (image + metadata) to iCloud Drive.
+    /// Exports a single feedback entry (image + metadata) to the local feedback directory.
     /// Call this whenever the user submits feedback on a detection.
     func exportFeedback(
         imageData: Data?,
@@ -32,14 +40,7 @@ final class FeedbackExporter {
         longitude: Double,
         timestamp: Date
     ) {
-        guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: nil) else {
-            print("[FeedbackExporter] iCloud container not available. Feedback not exported.")
-            return
-        }
-
-        let feedbackDir = containerURL
-            .appendingPathComponent("Documents")
-            .appendingPathComponent(feedbackDirectoryName)
+        let feedbackDir = feedbackDirectoryURL
 
         // Create directory if needed
         try? FileManager.default.createDirectory(at: feedbackDir, withIntermediateDirectories: true)
@@ -71,6 +72,25 @@ final class FeedbackExporter {
         // Append to manifest.json (read-modify-write)
         let manifestURL = feedbackDir.appendingPathComponent("manifest.json")
         appendToManifest(entry: entry, at: manifestURL)
+    }
+
+    /// Returns the feedback directory URL for sharing via UIActivityViewController.
+    /// Returns nil if no feedback has been exported yet.
+    func shareableURL() -> URL? {
+        let dir = feedbackDirectoryURL
+        guard FileManager.default.fileExists(atPath: dir.path) else { return nil }
+        return dir
+    }
+
+    /// Returns the count of feedback entries in the manifest.
+    var feedbackCount: Int {
+        let manifestURL = feedbackDirectoryURL.appendingPathComponent("manifest.json")
+        guard let data = try? Data(contentsOf: manifestURL),
+              let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let entries = manifest["entries"] as? [[String: Any]] else {
+            return 0
+        }
+        return entries.count
     }
 
     // MARK: - Private
