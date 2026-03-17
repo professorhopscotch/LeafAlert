@@ -59,6 +59,7 @@ class SpatialAttention(nn.Module):
 
     def __init__(self, kernel_size: int = 7):
         super().__init__()
+        assert kernel_size % 2 == 1, f"kernel_size must be odd, got {kernel_size}"
         padding = kernel_size // 2
         self.conv = nn.Conv2d(2, 1, kernel_size=kernel_size, padding=padding, bias=False)
         self.sigmoid = nn.Sigmoid()
