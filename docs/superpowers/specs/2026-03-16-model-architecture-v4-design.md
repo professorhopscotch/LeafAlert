@@ -59,15 +59,19 @@ Linear(128, 4)
 
 The bottleneck forces learning a compressed discriminative representation. BatchNorm stabilizes training with the small dataset. Two dropout stages provide regularization without being too aggressive.
 
+Note: DataLoader must use `drop_last=True` to avoid batch_size=1 edge case that crashes BatchNorm1d.
+
 Additional parameters: ~1.4M. Estimated size increase: ~1.5MB.
 
 ### 4. Test-Time Augmentation (TTA) in InferenceEngine.swift
 
 Run two inference passes per frame:
-1. Original image
-2. Horizontally flipped image
+1. Original image (normal orientation)
+2. Horizontally flipped image (using `CGImagePropertyOrientation.upMirrored` on the `VNImageRequestHandler` — zero-copy, no pixel buffer manipulation)
 
-Average the softmax probability vectors, then apply the existing `safe_plants` comparison logic. This smooths out orientation-dependent errors.
+Averaging logic: collect all `VNClassificationObservation` objects from both passes, group by `identifier`, average their `confidence` values, then apply the existing safe_plants comparison logic.
+
+Both passes run within a single `isProcessing` guard window — the second request fires immediately after the first completes. Frame drops may increase slightly but the capture engine's duty-cycled approach (one frame per stride) means this is acceptable.
 
 Expected latency increase: ~15ms (total ~30ms, well within 50ms budget).
 
@@ -95,9 +99,28 @@ The architectural changes require wrapping EfficientNet-B0 in a custom `nn.Modul
 
 The two-phase training adjusts `requires_grad` on `self.backbone` parameters, same as before.
 
+### Training Details
+
+**Phase 1 (classifier only):** Increase weight decay to `1e-3` (from `1e-4`) for the larger head to prevent overfitting.
+
+**Phase 2 (full fine-tune):** Discriminative LR parameter groups:
+- Early backbone (features[:4]): LR/50
+- Mid backbone (features[4:6]): LR/10
+- Late backbone (features[6:]): LR/3
+- Spatial attention: LR/3 (same as late backbone — operates on final feature map)
+- Classifier head: LR
+
+Early stopping patience remains at 8 epochs — the richer head converges within the same window due to the frozen-then-unfrozen strategy.
+
 ## Core ML Export
 
 The custom wrapper traces cleanly with `torch.jit.trace` since all operations (Conv2d, AdaptiveAvgPool2d, AdaptiveMaxPool2d, Linear, BatchNorm1d, ReLU, Dropout, sigmoid, cat, multiply) are standard ops supported by `coremltools`.
+
+Note: use `values, _ = torch.max(x, dim=1, keepdim=True)` to avoid trace warnings from unused indices tensor.
+
+Update model metadata: version to "4.0.0", description to reference EfficientNet-B0 with spatial attention (v4). Fix stale MobileNetV2 references in script docstring.
+
+The existing approximate per-channel scale (`1.0 / (255.0 * 0.226)`) is a known `coremltools` limitation — `ImageType` does not support per-channel scale, only per-channel bias. This is unchanged from v3 and is acceptable.
 
 ## Estimated Size
 
