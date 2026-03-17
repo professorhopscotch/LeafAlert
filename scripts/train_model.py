@@ -51,6 +51,62 @@ NUM_WORKERS = 0   # Safe for macOS
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
 
+# ─── Model Architecture ───────────────────────────────────────────
+
+class SpatialAttention(nn.Module):
+    """CBAM-style spatial attention. Produces a spatial mask that tells
+    the model WHERE on the feature map to focus (leaf vs background)."""
+
+    def __init__(self, kernel_size: int = 7):
+        super().__init__()
+        padding = kernel_size // 2
+        self.conv = nn.Conv2d(2, 1, kernel_size=kernel_size, padding=padding, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        pooled = torch.cat([avg_out, max_out], dim=1)  # [B, 2, H, W]
+        mask = self.sigmoid(self.conv(pooled))           # [B, 1, H, W]
+        return x * mask
+
+
+class PlantDetectorNet(nn.Module):
+    """EfficientNet-B0 backbone with spatial attention, dual pooling,
+    and a bottleneck classifier head."""
+
+    def __init__(self, num_classes: int):
+        super().__init__()
+        efficientnet = models.efficientnet_b0(
+            weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1
+        )
+        self.backbone = efficientnet.features  # [B, 1280, 7, 7]
+        self.spatial_attn = SpatialAttention(kernel_size=7)
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+
+        # Bottleneck classifier: 2560 → 512 → 128 → num_classes
+        self.classifier = nn.Sequential(
+            nn.Linear(2560, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.4),
+            nn.Linear(512, 128),
+            nn.BatchNorm1d(128),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.3),
+            nn.Linear(128, num_classes),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        features = self.backbone(x)             # [B, 1280, 7, 7]
+        features = self.spatial_attn(features)   # [B, 1280, 7, 7] (attended)
+        avg = self.avg_pool(features).flatten(1) # [B, 1280]
+        mx = self.max_pool(features).flatten(1)  # [B, 1280]
+        combined = torch.cat([avg, mx], dim=1)   # [B, 2560]
+        return self.classifier(combined)
+
+
 # ─── Data transforms ────────────────────────────────────────────────
 # Training: aggressive augmentation to simulate real hiking conditions
 # (varied lighting, angles, partial occlusion, phone shake blur)
@@ -77,24 +133,13 @@ test_transforms = transforms.Compose([
 ])
 
 
-def create_model(num_classes: int) -> nn.Module:
-    """Load EfficientNet-B0 pretrained on ImageNet, replace classifier head.
+def create_model(num_classes: int) -> PlantDetectorNet:
+    """Create PlantDetectorNet: EfficientNet-B0 + spatial attention + dual pooling + bottleneck head."""
+    model = PlantDetectorNet(num_classes)
 
-    EfficientNet-B0 has better feature quality than MobileNetV2 for
-    fine-grained classification tasks like distinguishing similar leaves.
-    """
-    model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1)
-
-    # Freeze backbone initially — only train the new classifier head
-    for param in model.features.parameters():
+    # Freeze backbone initially — only train attention + classifier head
+    for param in model.backbone.parameters():
         param.requires_grad = False
-
-    # EfficientNet-B0 classifier input is 1280
-    in_features = model.classifier[1].in_features
-    model.classifier = nn.Sequential(
-        nn.Dropout(p=0.4),
-        nn.Linear(in_features, num_classes),
-    )
 
     return model
 
