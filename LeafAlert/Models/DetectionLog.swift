@@ -11,8 +11,11 @@ final class DetectionLog {
     var longitude: Double
     var confidence: Float
     var plantType: String
-    var userConfirmed: Bool?
+    var feedbackStatus: String = "none"
+    var correctedLabel: String?
     @Attribute(.externalStorage) var imageThumbData: Data?
+
+    var hasUserFeedback: Bool { feedbackStatus != "none" }
 
     init(
         id: UUID = UUID(),
@@ -21,7 +24,8 @@ final class DetectionLog {
         longitude: Double = 0,
         confidence: Float = 0,
         plantType: String = "",
-        userConfirmed: Bool? = nil,
+        feedbackStatus: String = "none",
+        correctedLabel: String? = nil,
         imageThumbData: Data? = nil
     ) {
         self.id = id
@@ -30,7 +34,8 @@ final class DetectionLog {
         self.longitude = longitude
         self.confidence = confidence
         self.plantType = plantType
-        self.userConfirmed = userConfirmed
+        self.feedbackStatus = feedbackStatus
+        self.correctedLabel = correctedLabel
         self.imageThumbData = imageThumbData
     }
 }

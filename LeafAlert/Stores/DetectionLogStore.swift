@@ -51,12 +51,13 @@ final class DetectionLogStore: ObservableObject {
         try? modelContext.save()
     }
 
-    /// Updates a log entry's user confirmation status.
-    func updateConfirmation(logID: UUID, confirmed: Bool) {
+    /// Submits user feedback for a detection log entry.
+    func submitFeedback(logID: UUID, status: String, correctedLabel: String? = nil) {
         let predicate = #Predicate<DetectionLog> { $0.id == logID }
         let descriptor = FetchDescriptor(predicate: predicate)
         guard let log = try? modelContext.fetch(descriptor).first else { return }
-        log.userConfirmed = confirmed
+        log.feedbackStatus = status
+        log.correctedLabel = correctedLabel
         try? modelContext.save()
     }
 

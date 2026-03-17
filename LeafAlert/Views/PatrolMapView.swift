@@ -22,9 +22,9 @@ struct PatrolMapView: View {
         case .all:
             return logs
         case .confirmed:
-            return logs.filter { $0.userConfirmed == true }
+            return logs.filter { $0.feedbackStatus == "confirmed" || $0.feedbackStatus == "corrected" }
         case .unconfirmed:
-            return logs.filter { $0.userConfirmed != true }
+            return logs.filter { $0.feedbackStatus == "none" }
         }
     }
 
@@ -100,12 +100,13 @@ struct PatrolMapView: View {
             }
             .font(.subheadline)
 
-            if let confirmed = log.userConfirmed {
+            if log.hasUserFeedback {
                 Label(
-                    confirmed ? "Confirmed" : "Dismissed",
-                    systemImage: confirmed ? "checkmark.circle.fill" : "xmark.circle.fill"
+                    log.feedbackStatus == "discarded" ? "Dismissed" :
+                        log.feedbackStatus == "corrected" ? "Corrected" : "Confirmed",
+                    systemImage: log.feedbackStatus == "discarded" ? "xmark.circle.fill" : "checkmark.circle.fill"
                 )
-                .foregroundStyle(confirmed ? .green : .red)
+                .foregroundStyle(log.feedbackStatus == "discarded" ? .red : .green)
                 .font(.subheadline)
             }
 
@@ -113,7 +114,7 @@ struct PatrolMapView: View {
 
             HStack(spacing: 16) {
                 Button {
-                    updateConfirmation(log: log, confirmed: true)
+                    submitFeedback(log: log, status: "confirmed")
                     selectedLog = nil
                 } label: {
                     Label("Confirm", systemImage: "checkmark.circle")
@@ -124,7 +125,7 @@ struct PatrolMapView: View {
                 .tint(.green)
 
                 Button {
-                    updateConfirmation(log: log, confirmed: false)
+                    submitFeedback(log: log, status: "discarded")
                     selectedLog = nil
                 } label: {
                     Label("Dismiss", systemImage: "xmark.circle")
@@ -157,8 +158,9 @@ struct PatrolMapView: View {
 
     // MARK: - Helpers
 
-    private func updateConfirmation(log: DetectionLog, confirmed: Bool) {
-        log.userConfirmed = confirmed
+    private func submitFeedback(log: DetectionLog, status: String, correctedLabel: String? = nil) {
+        log.feedbackStatus = status
+        log.correctedLabel = correctedLabel
         try? modelContext.save()
     }
 }
