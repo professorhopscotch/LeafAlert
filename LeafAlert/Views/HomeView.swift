@@ -51,6 +51,11 @@ struct HomeView: View {
                     NavigationLink(destination: SettingsView()) {
                         Label("Settings", systemImage: "gear")
                     }
+                    #if DEBUG
+                    NavigationLink(destination: DebugDashboardView()) {
+                        Label("Debug", systemImage: "ant.fill")
+                    }
+                    #endif
                 }
                 .font(.callout)
 

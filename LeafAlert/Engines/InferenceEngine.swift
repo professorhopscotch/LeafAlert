@@ -14,6 +14,12 @@ final class InferenceEngine: ObservableObject {
     /// Duration (in seconds) of the most recent inference call, for performance diagnostics.
     @Published private(set) var lastInferenceTime: TimeInterval = 0
 
+    /// Per-class confidence values from the most recent inference. For debug display.
+    @Published private(set) var lastClassConfidences: [String: Float] = [:]
+
+    /// Total number of inferences run since model was loaded.
+    @Published private(set) var totalInferences: Int = 0
+
     // MARK: - Private Properties
 
     private var vnModel: VNCoreMLModel?
@@ -145,6 +151,12 @@ final class InferenceEngine: ObservableObject {
 
             // Average confidence values by class identifier
             let averaged = Self.averageObservations(originalObs, flippedObs)
+
+            // Publish per-class confidences for debug UI
+            DispatchQueue.main.async {
+                self.lastClassConfidences = averaged
+                self.totalInferences += 1
+            }
 
             finishInference()
 

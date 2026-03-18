@@ -37,6 +37,18 @@ final class CaptureEngine: NSObject, ObservableObject {
     /// Whether the capture pipeline is active (for UI heartbeat indicator).
     @Published private(set) var pipelineActive = false
 
+    /// Current net acceleration (|a| - 1g), updated at 100 Hz. For debug display.
+    @Published private(set) var currentNetAccel: Double = 0.0
+
+    /// Whether the camera sensor is currently powered on. For debug display.
+    @Published private(set) var isCameraActive = false
+
+    /// Total apogee events detected since patrol started.
+    @Published var apogeeCount: Int = 0
+
+    /// Total frames captured since patrol started.
+    @Published var totalFramesCaptured: Int = 0
+
     // MARK: - Configuration
 
     /// Minimum interval between captures (cooldown). Camera stays off during this period.
@@ -147,7 +159,11 @@ final class CaptureEngine: NSObject, ObservableObject {
         dutyCycleTimer = nil
         removeSessionObservers()
         isRunning = false
-        DispatchQueue.main.async { self.pipelineActive = false }
+        DispatchQueue.main.async {
+            self.pipelineActive = false
+            self.isCameraActive = false
+            self.currentNetAccel = 0
+        }
     }
 
     // MARK: - Camera Power (Duty Cycle)
@@ -161,9 +177,11 @@ final class CaptureEngine: NSObject, ObservableObject {
             connection.isEnabled = true
             isCameraOn = true
             captureWindowOpenedAt = Date()
+            DispatchQueue.main.async { self.isCameraActive = true }
         } else if !on && isCameraOn {
             connection.isEnabled = false
             isCameraOn = false
+            DispatchQueue.main.async { self.isCameraActive = false }
         }
     }
 
@@ -229,6 +247,14 @@ final class CaptureEngine: NSObject, ObservableObject {
 
             if isApogee || isStill {
                 self.apogeeDetected = true
+                if isApogee {
+                    DispatchQueue.main.async { self.apogeeCount += 1 }
+                }
+            }
+
+            // Throttle UI updates to ~10 Hz (every 10th sample at 100 Hz)
+            if Int.random(in: 0..<10) == 0 {
+                DispatchQueue.main.async { self.currentNetAccel = netAccel }
             }
 
             self.previousNetAccel = netAccel
@@ -369,6 +395,7 @@ extension CaptureEngine: AVCaptureVideoDataOutputSampleBufferDelegate {
         isProcessingFrame = true
         lastCaptureTime = Date()
         frameCountInWindow += 1
+        DispatchQueue.main.async { self.totalFramesCaptured += 1 }
         setCameraPower(on: false)
 
         onFrameCaptured?(pixelBuffer)
