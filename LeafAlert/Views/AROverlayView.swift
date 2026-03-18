@@ -73,10 +73,16 @@ struct ARViewContainer: UIViewRepresentable {
     private static let pulseScaleFactor: Float = 1.15
 
     func makeUIView(context: Context) -> ARView {
-        let arView = ARView(frame: .zero)
+        let arView = ARView(frame: UIScreen.main.bounds)
+        arView.automaticallyConfigureSession = false
         let config = ARWorldTrackingConfiguration()
+        config.isAutoFocusEnabled = true
         arView.session.run(config)
         return arView
+    }
+
+    static func dismantleUIView(_ uiView: ARView, coordinator: ()) {
+        uiView.session.pause()
     }
 
     func updateUIView(_ uiView: ARView, context: Context) {

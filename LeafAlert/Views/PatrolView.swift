@@ -89,9 +89,20 @@ struct PatrolView: View {
         }
         .navigationTitle("Patrol")
         .navigationBarTitleDisplayMode(.inline)
-        .sheet(isPresented: $showAROverlay) {
+        .sheet(isPresented: $showAROverlay, onDismiss: {
+            // Resume the capture session after AR releases the camera.
+            if appState.isPatrolling {
+                appState.captureEngine.start()
+            }
+        }) {
             if let detection = appState.lastDetection {
                 AROverlayView(detectionResult: detection)
+            }
+        }
+        .onChange(of: showAROverlay) { _, isShowing in
+            if isShowing {
+                // Pause the capture session so ARKit can claim the camera.
+                appState.captureEngine.stop()
             }
         }
         .onDisappear {

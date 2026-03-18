@@ -112,9 +112,15 @@ final class CaptureEngine: NSObject, ObservableObject {
 
     // MARK: - Lifecycle
 
+    /// Whether the capture session has been configured (inputs/outputs added).
+    private var isConfigured = false
+
     func start() {
         guard !isRunning else { return }
-        configureCaptureSession()
+        if !isConfigured {
+            configureCaptureSession()
+            isConfigured = true
+        }
         startMotionUpdates()
         startDiagnosticsTimer()
         startDutyCycleTimer()
