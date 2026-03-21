@@ -177,16 +177,37 @@ final class InferenceEngine: ObservableObject {
             }
 
             let clampedConfidence = min(max(topToxic.value, 0.0), 1.0)
+
+            // Use attention-based saliency to approximate bounding box.
+            let bbox = Self.saliencyBoundingBox(pixelBuffer: pixelBuffer)
+
             let result = DetectionResult(
                 plantType: topToxic.key,
                 confidence: clampedConfidence,
-                boundingBox: .zero
+                boundingBox: bbox
             )
             completion(result)
         }
     }
 
     // MARK: - TTA Helpers
+
+    /// Runs attention-based saliency to find the most prominent object region.
+    /// Returns a normalised CGRect (Vision coordinates: origin bottom-left) or .zero on failure.
+    private static func saliencyBoundingBox(pixelBuffer: CVPixelBuffer) -> CGRect {
+        let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, options: [:])
+        let request = VNGenerateAttentionBasedSaliencyImageRequest()
+        do {
+            try handler.perform([request])
+        } catch {
+            return .zero
+        }
+        guard let observation = request.results?.first,
+              let salientObject = observation.salientObjects?.first else {
+            return .zero
+        }
+        return salientObject.boundingBox
+    }
 
     /// Averages confidence values from two sets of classification observations.
     private static func averageObservations(

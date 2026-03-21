@@ -25,6 +25,8 @@
 		A10000016 /* DetectionFormatting.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000017; };
 		A10000018 /* FeedbackExporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000018; };
 		A10000019 /* DebugDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000019; };
+		A10000020 /* CameraPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000020; };
+		A10000021 /* BoundingBoxOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000021; };
 		B10000001 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B20000001; };
 		B10000002 /* Vision.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B20000002; };
 		B10000003 /* CoreML.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B20000003; };
@@ -57,6 +59,8 @@
 		A20000017 /* DetectionFormatting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetectionFormatting.swift; sourceTree = "<group>"; };
 		A20000018 /* FeedbackExporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedbackExporter.swift; sourceTree = "<group>"; };
 		A20000019 /* DebugDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugDashboardView.swift; sourceTree = "<group>"; };
+		A20000020 /* CameraPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPreviewView.swift; sourceTree = "<group>"; };
+		A20000021 /* BoundingBoxOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundingBoxOverlay.swift; sourceTree = "<group>"; };
 A20000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A30000001 /* LeafAlert.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LeafAlert.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B20000001 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
@@ -156,6 +160,8 @@ A20000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.p
 				A20000012 /* SettingsView.swift */,
 				A20000017 /* DetectionFormatting.swift */,
 				A20000019 /* DebugDashboardView.swift */,
+				A20000020 /* CameraPreviewView.swift */,
+				A20000021 /* BoundingBoxOverlay.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -297,6 +303,8 @@ A20000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.p
 				A10000016 /* DetectionFormatting.swift in Sources */,
 				A10000018 /* FeedbackExporter.swift in Sources */,
 				A10000019 /* DebugDashboardView.swift in Sources */,
+				A10000020 /* CameraPreviewView.swift in Sources */,
+				A10000021 /* BoundingBoxOverlay.swift in Sources */,
 				C10000001 /* PlantDetector.mlpackage in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

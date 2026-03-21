@@ -77,6 +77,9 @@ final class CaptureEngine: NSObject, ObservableObject {
     /// Called on a background queue when a frame is ready for inference.
     var onFrameCaptured: ((CVPixelBuffer) -> Void)?
 
+    /// Exposed for CameraPreviewView to attach a preview layer.
+    var session: AVCaptureSession { captureSession }
+
     // MARK: - Private Properties
 
     private let captureSession = AVCaptureSession()

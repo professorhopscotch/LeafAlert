@@ -32,6 +32,7 @@ final class AppState: ObservableObject {
     // MARK: - Private
 
     private var settingsCancellables = Set<AnyCancellable>()
+    private var engineCancellables = Set<AnyCancellable>()
     private let ciContext = CIContext()
 
     // MARK: - Init
@@ -39,6 +40,7 @@ final class AppState: ObservableObject {
     init() {
         self.hasShownDisclaimer = UserDefaults.standard.bool(forKey: "hasShownDisclaimer")
         observeSettingsChanges()
+        forwardEngineChanges()
     }
 
     // MARK: - Patrol Lifecycle
@@ -94,6 +96,15 @@ final class AppState: ObservableObject {
         alertEngine.sensitivityThreshold = Float(sensitivityThreshold)
         alertEngine.audioAlertsEnabled = audioAlertsEnabled
         captureEngine.isBatterySaverEnabled = batterySaverEnabled
+    }
+
+    /// Forwards objectWillChange from child engines so SwiftUI views that read
+    /// nested engine properties (e.g. `appState.captureEngine.pipelineActive`) update correctly.
+    private func forwardEngineChanges() {
+        captureEngine.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &engineCancellables)
     }
 
     /// Watches UserDefaults for settings changes and live-syncs them to engines during an active patrol.

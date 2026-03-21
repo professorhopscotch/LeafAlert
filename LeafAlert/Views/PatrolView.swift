@@ -19,31 +19,37 @@ struct PatrolView: View {
 
     var body: some View {
         ZStack {
-            // Dimmed background during patrol
-            Color.black.opacity(appState.isPatrolling ? appState.screenDimLevel : 0)
-                .ignoresSafeArea()
+            if appState.isPatrolling {
+                // Live camera preview
+                CameraPreviewView(session: appState.captureEngine.session)
+                    .ignoresSafeArea()
 
-            VStack(spacing: 24) {
-                if appState.isPatrolling {
-                    Spacer()
+                // Bounding box overlay when detection has a valid region
+                if let detection = appState.lastDetection,
+                   detection.boundingBox != .zero {
+                    BoundingBoxOverlay(
+                        boundingBox: detection.boundingBox,
+                        label: DetectionFormatting.plantDisplayName(detection.plantType),
+                        confidence: detection.confidence
+                    )
+                    .ignoresSafeArea()
+                }
 
-                    Image(systemName: "eye.fill")
-                        .font(.system(size: 48))
-                        .foregroundStyle(.green)
-
-                    Text("Patrolling\u{2026}")
-                        .font(.title2)
-                        .foregroundStyle(.white)
-
-                    // Pipeline heartbeat -- shows whether camera frames are flowing
+                // Top status bar
+                VStack {
                     HStack(spacing: 6) {
                         Circle()
                             .fill(appState.captureEngine.pipelineActive ? .green : .red)
                             .frame(width: 8, height: 8)
-                        Text(appState.captureEngine.pipelineActive ? "Camera active" : "Camera paused")
-                            .font(.caption2)
-                            .foregroundStyle(.white.opacity(0.6))
+                        Text(appState.captureEngine.pipelineActive ? "Patrolling" : "Camera paused")
+                            .font(.caption2.bold())
+                            .foregroundStyle(.white)
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(.black.opacity(0.5))
+                    .clipShape(Capsule())
+                    .padding(.top, 4)
 
                     Spacer()
 
@@ -56,11 +62,16 @@ struct PatrolView: View {
                     .foregroundStyle(.white)
                     .clipShape(Capsule())
                     .padding(.bottom, 48)
-                } else {
+                }
+            } else {
+                Color.black.ignoresSafeArea()
+
+                VStack(spacing: 24) {
                     Spacer()
 
                     Text("Ready to patrol")
                         .font(.title2)
+                        .foregroundStyle(.white)
 
                     Button("Start Patrol") {
                         startPatrol()
