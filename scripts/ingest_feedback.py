@@ -2,15 +2,16 @@
 """
 Ingest user feedback into the training dataset.
 
-Reads manifest.json from a feedback folder (AirDropped or copied from
-the iPhone via Files app), copies confirmed/corrected images into
-TrainingData_split/train/<label>/, and skips discarded or not_a_plant entries.
+Reads manifest.json from a feedback folder, copies confirmed/corrected images
+into TrainingData_split/train/<label>/, and skips discarded or not_a_plant entries.
 
 Usage:
     python3 scripts/ingest_feedback.py [--feedback-dir PATH]
 
-The feedback folder is exported from the app's Documents/feedback/ directory.
-Transfer it to your Mac via AirDrop, Files app, or Finder.
+The feedback folder can come from:
+  - iCloud Drive sync (auto-detected from ~/Library/Mobile Documents/...)
+  - AirDrop from the iPhone
+  - Local project root (default fallback)
 """
 
 import argparse
@@ -24,6 +25,12 @@ TRAIN_DIR = PROJECT_ROOT / "TrainingData_split" / "train"
 
 # Default: look in project root for an AirDropped feedback folder
 DEFAULT_FEEDBACK_DIR = PROJECT_ROOT / "feedback"
+
+# iCloud Drive paths to search for feedback (user may have picked any of these)
+ICLOUD_SEARCH_PATHS = [
+    Path.home() / "Library" / "Mobile Documents" / "com~apple~CloudDocs" / "LeafAlert" / "feedback",
+    Path.home() / "Library" / "Mobile Documents" / "com~apple~CloudDocs" / "feedback",
+]
 
 # Labels that map to training classes
 VALID_LABELS = {"poison_ivy", "poison_oak", "poison_sumac", "safe_plants"}
@@ -134,12 +141,24 @@ def main():
     print(f"Train dir:    {args.train_dir}")
     print()
 
-    if not args.feedback_dir.exists():
-        print(f"Feedback directory not found: {args.feedback_dir}")
-        print("Make sure iCloud Drive is syncing and the app has exported feedback.")
-        sys.exit(1)
+    feedback_dir = args.feedback_dir
 
-    ingest_feedback(args.feedback_dir, args.train_dir, args.dry_run)
+    # Auto-discover feedback from iCloud Drive if default path doesn't exist
+    if not feedback_dir.exists():
+        for icloud_path in ICLOUD_SEARCH_PATHS:
+            if icloud_path.exists() and (icloud_path / "manifest.json").exists():
+                feedback_dir = icloud_path
+                print(f"Found iCloud feedback at: {icloud_path}")
+                break
+        else:
+            print(f"Feedback directory not found at: {args.feedback_dir}")
+            print("Searched iCloud Drive paths:")
+            for p in ICLOUD_SEARCH_PATHS:
+                print(f"  {p}")
+            print("\nPick a folder in iCloud Drive from the app's Settings > Feedback Sync.")
+            sys.exit(1)
+
+    ingest_feedback(feedback_dir, args.train_dir, args.dry_run)
 
 
 if __name__ == "__main__":

@@ -8,8 +8,8 @@ struct SettingsView: View {
     @AppStorage("batterySaverEnabled") private var batterySaverEnabled = false
     @AppStorage("livePreviewEnabled") private var livePreviewEnabled = true
 
-    @ObservedObject private var uploader = FeedbackUploader.shared
-    @State private var manualHost = ""
+    @ObservedObject private var exporter = FeedbackExporter.shared
+    @State private var showFolderPicker = false
     @State private var showClearConfirmation = false
 
     @EnvironmentObject private var appState: AppState
@@ -56,75 +56,39 @@ struct SettingsView: View {
             }
 
             Section("Feedback Sync") {
-                // Server status
-                HStack {
-                    Image(systemName: uploader.isServerAvailable ? "wifi" : "wifi.slash")
-                        .foregroundStyle(uploader.isServerAvailable ? .green : .secondary)
-                    if let address = uploader.serverAddress {
-                        Text(address)
-                            .font(.subheadline.monospaced())
-                    } else {
-                        Text("Searching for server\u{2026}")
-                            .foregroundStyle(.secondary)
+                if exporter.hasSyncFolder {
+                    HStack {
+                        Image(systemName: "checkmark.icloud.fill")
+                            .foregroundStyle(.green)
+                        Text(exporter.syncFolderName ?? "iCloud Drive")
+                            .font(.subheadline)
                     }
-                }
 
-                // Manual server entry
-                HStack {
-                    TextField("Server IP (e.g. 192.168.1.42)", text: $manualHost)
-                        .textContentType(.URL)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .font(.subheadline.monospaced())
-                    Button("Connect") {
-                        let host = manualHost.trimmingCharacters(in: .whitespaces)
-                        guard !host.isEmpty else { return }
-                        uploader.setManualServer(host: host)
+                    Button("Change Folder") {
+                        showFolderPicker = true
                     }
-                    .disabled(manualHost.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
 
-                // Sync button + counts
-                HStack {
+                    Button("Remove Sync Folder", role: .destructive) {
+                        exporter.clearSyncFolder()
+                    }
+                } else {
                     Button {
-                        uploader.syncAll()
+                        showFolderPicker = true
                     } label: {
-                        HStack(spacing: 6) {
-                            if uploader.isSyncing {
-                                ProgressView()
-                                    .controlSize(.small)
-                            }
-                            Text(uploader.isSyncing ? "Syncing\u{2026}" : "Sync Now")
+                        HStack {
+                            Image(systemName: "icloud.and.arrow.up")
+                            Text("Set iCloud Sync Folder")
                         }
                     }
-                    .disabled(!uploader.isServerAvailable || uploader.isSyncing)
-
-                    Spacer()
-
-                    Text("\(uploader.syncedCount) synced")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
 
-                if let error = uploader.lastError {
-                    Text(error)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-
-                if let lastSync = uploader.lastSyncDate {
-                    Text("Last sync: \(lastSync.formatted(.relative(presentation: .named)))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Text("Run `python3 scripts/feedback_server.py` on your Mac. The app will discover it automatically via Bonjour, or enter the IP manually.")
+                Text("Pick a folder in iCloud Drive. Feedback images and metadata sync to your Mac automatically.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             Section("Data") {
-                LabeledContent("Feedback entries", value: "\(FeedbackExporter.shared.feedbackCount)")
+                LabeledContent("Feedback entries", value: "\(exporter.feedbackCount)")
 
                 Button("Clear Detection Log", role: .destructive) {
                     showClearConfirmation = true
@@ -140,6 +104,11 @@ struct SettingsView: View {
         }
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.inline)
+        .sheet(isPresented: $showFolderPicker) {
+            FolderPickerView { url in
+                exporter.setSyncFolder(url)
+            }
+        }
         .confirmationDialog(
             "Clear all detection logs?",
             isPresented: $showClearConfirmation,
@@ -151,6 +120,32 @@ struct SettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This will permanently delete all saved detections and photos. This cannot be undone.")
+        }
+    }
+}
+
+/// Wraps UIDocumentPickerViewController to let the user choose a folder (e.g., in iCloud Drive).
+struct FolderPickerView: UIViewControllerRepresentable {
+    let onPick: (URL) -> Void
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder])
+        picker.directoryURL = FileManager.default.url(forUbiquityContainerIdentifier: nil)
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator { Coordinator(onPick: onPick) }
+
+    class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onPick: (URL) -> Void
+        init(onPick: @escaping (URL) -> Void) { self.onPick = onPick }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            guard let url = urls.first else { return }
+            onPick(url)
         }
     }
 }

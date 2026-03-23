@@ -260,6 +260,7 @@ def main():
     print()
 
     server = HTTPServer(("0.0.0.0", args.port), FeedbackHandler)
+    server.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.output_dir = str(output_dir)
 
     bonjour_service = register_bonjour(args.port)
