@@ -17,6 +17,8 @@ final class FeedbackExporter {
     static let shared = FeedbackExporter()
 
     private let feedbackDirectoryName = "feedback"
+    /// Serializes all file I/O to prevent concurrent read-modify-write races on manifest.json.
+    private let ioQueue = DispatchQueue(label: "com.leafalert.feedback-io")
 
     private init() {}
 
@@ -40,38 +42,47 @@ final class FeedbackExporter {
         longitude: Double,
         timestamp: Date
     ) {
-        let feedbackDir = feedbackDirectoryURL
+        ioQueue.async { [self] in
+            let feedbackDir = feedbackDirectoryURL
 
-        // Create directory if needed
-        try? FileManager.default.createDirectory(at: feedbackDir, withIntermediateDirectories: true)
+            // Create directory if needed
+            try? FileManager.default.createDirectory(at: feedbackDir, withIntermediateDirectories: true)
 
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        let timestampStr = formatter.string(from: timestamp)
-            .replacingOccurrences(of: ":", with: "-")
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime]
+            let timestampStr = formatter.string(from: timestamp)
+                .replacingOccurrences(of: ":", with: "-")
 
-        // Save image
-        let filename = "\(timestampStr)_\(correctedLabel)_\(feedbackStatus).jpg"
-        if let imageData = imageData {
-            let imageURL = feedbackDir.appendingPathComponent(filename)
-            try? imageData.write(to: imageURL)
+            // Save image
+            let filename = "\(timestampStr)_\(correctedLabel)_\(feedbackStatus).jpg"
+            if let imageData = imageData {
+                let imageURL = feedbackDir.appendingPathComponent(filename)
+                try? imageData.write(to: imageURL)
+            }
+
+            // Build manifest entry
+            let entry: [String: Any] = [
+                "filename": filename,
+                "originalPrediction": originalPrediction,
+                "correctedLabel": correctedLabel,
+                "feedbackStatus": feedbackStatus,
+                "confidence": confidence,
+                "timestamp": formatter.string(from: timestamp),
+                "latitude": latitude,
+                "longitude": longitude
+            ]
+
+            // Append to manifest.json (read-modify-write, serialized by ioQueue)
+            let manifestURL = feedbackDir.appendingPathComponent("manifest.json")
+            self.appendToManifest(entry: entry, at: manifestURL)
+
+            // Auto-upload to sync server if available
+            FeedbackUploader.shared.uploadEntry(
+                imageData: imageData,
+                metadata: entry,
+                filename: filename
+            )
         }
-
-        // Build manifest entry
-        let entry: [String: Any] = [
-            "filename": filename,
-            "originalPrediction": originalPrediction,
-            "correctedLabel": correctedLabel,
-            "feedbackStatus": feedbackStatus,
-            "confidence": confidence,
-            "timestamp": formatter.string(from: timestamp),
-            "latitude": latitude,
-            "longitude": longitude
-        ]
-
-        // Append to manifest.json (read-modify-write)
-        let manifestURL = feedbackDir.appendingPathComponent("manifest.json")
-        appendToManifest(entry: entry, at: manifestURL)
     }
 
     /// Returns the feedback directory URL for sharing via UIActivityViewController.

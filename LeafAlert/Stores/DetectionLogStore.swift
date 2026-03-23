@@ -12,6 +12,9 @@ final class DetectionLogStore: ObservableObject {
     private let modelContainer: ModelContainer
     private let locationManager = CLLocationManager()
 
+    /// True if SwiftData fell back to in-memory storage due to a persistent store error.
+    private(set) var isUsingInMemoryFallback = false
+
     var modelContext: ModelContext {
         modelContainer.mainContext
     }
@@ -19,12 +22,21 @@ final class DetectionLogStore: ObservableObject {
     // MARK: - Init
 
     init() {
+        let schema = Schema([DetectionLog.self])
         do {
-            let schema = Schema([DetectionLog.self])
             let config = ModelConfiguration(isStoredInMemoryOnly: false)
             modelContainer = try ModelContainer(for: schema, configurations: [config])
         } catch {
-            fatalError("[DetectionLogStore] Failed to create ModelContainer: \(error)")
+            print("[DetectionLogStore] Persistent store failed: \(error). Falling back to in-memory storage.")
+            // Fall back to in-memory so detection still works even if logging can't persist.
+            let fallbackConfig = ModelConfiguration(isStoredInMemoryOnly: true)
+            do {
+                modelContainer = try ModelContainer(for: schema, configurations: [fallbackConfig])
+            } catch {
+                // In-memory should never fail, but if it does, create a minimal container.
+                modelContainer = try! ModelContainer(for: schema, configurations: [ModelConfiguration(isStoredInMemoryOnly: true)])
+            }
+            isUsingInMemoryFallback = true
         }
     }
 

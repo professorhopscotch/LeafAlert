@@ -4,30 +4,37 @@ import SwiftUI
 struct PlantDetailView: View {
     var selectedPlantID: String? = nil
 
-    @State private var selectedPlant: PlantInfo?
+    @State private var navigationPath: [String] = []
 
     var body: some View {
-        List(PlantInfo.all) { plant in
-            NavigationLink(destination: plantDetail(plant)) {
-                HStack {
-                    Image(systemName: "leaf.fill")
-                        .foregroundStyle(plantColor(plant.id))
-                    VStack(alignment: .leading) {
-                        Text(plant.commonName)
-                            .font(.headline)
-                        Text(plant.scientificName)
-                            .font(.caption)
-                            .italic()
-                            .foregroundStyle(.secondary)
+        NavigationStack(path: $navigationPath) {
+            List(PlantInfo.all) { plant in
+                NavigationLink(value: plant.id) {
+                    HStack {
+                        Image(systemName: "leaf.fill")
+                            .foregroundStyle(plantColor(plant.id))
+                        VStack(alignment: .leading) {
+                            Text(plant.commonName)
+                                .font(.headline)
+                            Text(plant.scientificName)
+                                .font(.caption)
+                                .italic()
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
             }
+            .navigationTitle("Plant Guide")
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(for: String.self) { plantID in
+                if let plant = PlantInfo.find(by: plantID) {
+                    plantDetail(plant)
+                }
+            }
         }
-        .navigationTitle("Plant Guide")
-        .navigationBarTitleDisplayMode(.inline)
         .onAppear {
-            if let selectedPlantID {
-                selectedPlant = PlantInfo.find(by: selectedPlantID)
+            if let selectedPlantID, navigationPath.isEmpty {
+                navigationPath = [selectedPlantID]
             }
         }
     }

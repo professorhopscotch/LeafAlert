@@ -37,6 +37,12 @@
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>LeafAlert discovers the feedback sync server on your local network to automatically upload training data.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_leafalert._tcp</string>
+	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>LeafAlert needs camera access to detect toxic plants in your surroundings while hiking.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>

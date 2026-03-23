@@ -40,7 +40,7 @@ final class CaptureEngine: NSObject, ObservableObject {
     /// Current net acceleration (|a| - 1g), updated at 100 Hz. For debug display.
     @Published private(set) var currentNetAccel: Double = 0.0
 
-    /// Whether the camera sensor is currently powered on. For debug display.
+    /// Whether the inference window is open (duty cycle). For debug display.
     @Published private(set) var isCameraActive = false
 
     /// Total apogee events detected since patrol started.
@@ -49,28 +49,53 @@ final class CaptureEngine: NSObject, ObservableObject {
     /// Total frames captured since patrol started.
     @Published var totalFramesCaptured: Int = 0
 
-    // MARK: - Configuration
+    // MARK: - Configuration (thread-safe via configLock)
+
+    private let configLock = NSLock()
+
+    private var _minCaptureInterval: TimeInterval = 1.0
+    private var _batterySaverInterval: TimeInterval = 4.0
+    private var _maxCaptureWindowDuration: TimeInterval = 1.5
+    private var _forcedCaptureInterval: TimeInterval = 4.0
+    private var _stillnessThreshold: Double = 0.08
+    private var _isBatterySaverEnabled = false
 
     /// Minimum interval between captures (cooldown). Camera stays off during this period.
-    var minCaptureInterval: TimeInterval = 1.0
+    var minCaptureInterval: TimeInterval {
+        get { configLock.lock(); defer { configLock.unlock() }; return _minCaptureInterval }
+        set { configLock.lock(); defer { configLock.unlock() }; _minCaptureInterval = newValue }
+    }
 
     /// Minimum interval between captures when in battery-saver mode.
-    var batterySaverInterval: TimeInterval = 4.0
+    var batterySaverInterval: TimeInterval {
+        get { configLock.lock(); defer { configLock.unlock() }; return _batterySaverInterval }
+        set { configLock.lock(); defer { configLock.unlock() }; _batterySaverInterval = newValue }
+    }
 
     /// Maximum time the camera stays powered on waiting for a good frame.
-    /// If no frame is captured within this window, camera powers off and retries next cycle.
-    var maxCaptureWindowDuration: TimeInterval = 1.5
+    var maxCaptureWindowDuration: TimeInterval {
+        get { configLock.lock(); defer { configLock.unlock() }; return _maxCaptureWindowDuration }
+        set { configLock.lock(); defer { configLock.unlock() }; _maxCaptureWindowDuration = newValue }
+    }
 
     /// Maximum time between forced capture attempts regardless of apogee detection.
-    /// Ensures the pipeline never fully stalls (e.g., phone on a tripod with no motion).
-    var forcedCaptureInterval: TimeInterval = 4.0
+    var forcedCaptureInterval: TimeInterval {
+        get { configLock.lock(); defer { configLock.unlock() }; return _forcedCaptureInterval }
+        set { configLock.lock(); defer { configLock.unlock() }; _forcedCaptureInterval = newValue }
+    }
 
     /// Net acceleration (g) below which the device is considered "still enough" to
     /// trigger a capture window even without an apogee zero-crossing.
-    var stillnessThreshold: Double = 0.08
+    var stillnessThreshold: Double {
+        get { configLock.lock(); defer { configLock.unlock() }; return _stillnessThreshold }
+        set { configLock.lock(); defer { configLock.unlock() }; _stillnessThreshold = newValue }
+    }
 
     /// Whether battery saver mode is active.
-    var isBatterySaverEnabled = false
+    var isBatterySaverEnabled: Bool {
+        get { configLock.lock(); defer { configLock.unlock() }; return _isBatterySaverEnabled }
+        set { configLock.lock(); defer { configLock.unlock() }; _isBatterySaverEnabled = newValue }
+    }
 
     // MARK: - Callbacks
 
@@ -104,11 +129,11 @@ final class CaptureEngine: NSObject, ObservableObject {
         set { motionLock.lock(); defer { motionLock.unlock() }; _apogeeDetected = newValue }
     }
 
-    /// Whether the camera is currently powered on and accepting frames.
+    /// Whether the inference window is open (ready to capture a frame for ML).
     /// Accessed only on `captureQueue`.
-    private var isCameraOn = false
+    private var isInferenceWindowOpen = false
 
-    /// When the current capture window was opened. Used to enforce maxCaptureWindowDuration.
+    /// When the current inference window was opened. Used to enforce maxCaptureWindowDuration.
     /// Accessed only on `captureQueue`.
     private var captureWindowOpenedAt: Date = .distantPast
 
@@ -141,27 +166,35 @@ final class CaptureEngine: NSObject, ObservableObject {
         startDutyCycleTimer()
         observeSessionInterruptions()
 
-        // Start the session (keeps it warm) but camera output starts disabled.
-        captureQueue.async { [weak self] in
-            self?.captureSession.startRunning()
-        }
+        // Mark as running before dispatching to prevent stop() racing ahead.
         isRunning = true
         DispatchQueue.main.async { self.pipelineActive = true }
+
+        // Start the session (keeps it warm) but camera output starts disabled.
+        captureQueue.async { [weak self] in
+            guard let self else { return }
+            // If stop() was called before this block ran, bail out.
+            guard self.isRunning else { return }
+            self.captureSession.startRunning()
+        }
     }
 
     func stop() {
         guard isRunning else { return }
-        captureQueue.async { [weak self] in
-            self?.setCameraPower(on: false)
-            self?.captureSession.stopRunning()
-        }
+        // Set isRunning false immediately so the pending startRunning() block will bail out.
+        isRunning = false
         motionManager.stopAccelerometerUpdates()
         diagnosticsTimer?.invalidate()
         diagnosticsTimer = nil
         dutyCycleTimer?.invalidate()
         dutyCycleTimer = nil
         removeSessionObservers()
-        isRunning = false
+
+        captureQueue.async { [weak self] in
+            guard let self else { return }
+            self.setInferenceWindow(open: false)
+            self.captureSession.stopRunning()
+        }
         DispatchQueue.main.async {
             self.pipelineActive = false
             self.isCameraActive = false
@@ -171,19 +204,18 @@ final class CaptureEngine: NSObject, ObservableObject {
 
     // MARK: - Camera Power (Duty Cycle)
 
-    /// Enables or disables the video output connection, effectively powering the
-    /// frame delivery pipeline on or off without the ~1-2s cost of startRunning/stopRunning.
+    /// Opens or closes the inference window. When open, the next frame from the
+    /// delegate will be forwarded to `onFrameCaptured` for ML processing.
+    /// The video connection stays enabled at all times so the preview layer always
+    /// receives frames.
     /// Must be called on `captureQueue`.
-    private func setCameraPower(on: Bool) {
-        guard let connection = videoOutput?.connection(with: .video) else { return }
-        if on && !isCameraOn {
-            connection.isEnabled = true
-            isCameraOn = true
+    private func setInferenceWindow(open: Bool) {
+        if open && !isInferenceWindowOpen {
+            isInferenceWindowOpen = true
             captureWindowOpenedAt = Date()
             DispatchQueue.main.async { self.isCameraActive = true }
-        } else if !on && isCameraOn {
-            connection.isEnabled = false
-            isCameraOn = false
+        } else if !open && isInferenceWindowOpen {
+            isInferenceWindowOpen = false
             DispatchQueue.main.async { self.isCameraActive = false }
         }
     }
@@ -194,8 +226,13 @@ final class CaptureEngine: NSObject, ObservableObject {
         captureSession.beginConfiguration()
         captureSession.sessionPreset = .vga640x480
 
+        // Prefer the ultra-wide camera for maximum field of view; fall back to wide angle.
+        let camera: AVCaptureDevice? =
+            AVCaptureDevice.default(.builtInUltraWideCamera, for: .video, position: .back)
+            ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
+
         guard
-            let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
+            let camera,
             let input = try? AVCaptureDeviceInput(device: camera),
             captureSession.canAddInput(input)
         else {
@@ -212,11 +249,6 @@ final class CaptureEngine: NSObject, ObservableObject {
         }
         videoOutput = output
 
-        // Start with camera output disabled — duty cycle will enable it on apogee.
-        if let connection = output.connection(with: .video) {
-            connection.isEnabled = false
-        }
-
         captureSession.commitConfiguration()
     }
 
@@ -228,8 +260,8 @@ final class CaptureEngine: NSObject, ObservableObject {
     ///   - Zero at apogee — optimal capture moment
     private func startMotionUpdates() {
         guard motionManager.isAccelerometerAvailable else {
-            // No accelerometer (simulator) — keep camera always on.
-            captureQueue.async { [weak self] in self?.setCameraPower(on: true) }
+            // No accelerometer (simulator) — keep inference window always open.
+            captureQueue.async { [weak self] in self?.setInferenceWindow(open: true) }
             return
         }
         motionManager.accelerometerUpdateInterval = 0.01  // 100 Hz
@@ -282,23 +314,23 @@ final class CaptureEngine: NSObject, ObservableObject {
         let timeSinceLastCapture = now.timeIntervalSince(lastCaptureTime)
         let cooldown = isBatterySaverEnabled ? batterySaverInterval : minCaptureInterval
 
-        if isCameraOn {
-            // Camera is on — check if we should turn it off.
+        if isInferenceWindowOpen {
+            // Inference window is open — check if it should close.
             let windowDuration = now.timeIntervalSince(captureWindowOpenedAt)
             if windowDuration >= maxCaptureWindowDuration {
-                // Window expired without capturing — power off and try again next cycle.
-                setCameraPower(on: false)
+                // Window expired without capturing — close and try again next cycle.
+                setInferenceWindow(open: false)
             }
         } else {
-            // Camera is off — should we power it on?
+            // Inference window is closed — should we open it?
             guard timeSinceLastCapture >= cooldown else { return }
             guard !isProcessingFrame else { return }
 
-            let shouldWake = apogeeDetected || timeSinceLastCapture >= forcedCaptureInterval
+            let shouldCapture = apogeeDetected || timeSinceLastCapture >= forcedCaptureInterval
 
-            if shouldWake {
+            if shouldCapture {
                 apogeeDetected = false
-                setCameraPower(on: true)
+                setInferenceWindow(open: true)
             }
         }
     }
@@ -388,18 +420,18 @@ extension CaptureEngine: AVCaptureVideoDataOutputSampleBufferDelegate {
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
-        // Only deliver frames when camera is powered on and pipeline is ready.
-        guard isCameraOn else { return }
+        // Only forward frames for inference when the duty cycle window is open.
+        guard isInferenceWindowOpen else { return }
         guard !isProcessingFrame else { return }
 
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
-        // Got a frame — capture it and immediately power off the camera.
+        // Got a frame — capture it and close the inference window.
         isProcessingFrame = true
         lastCaptureTime = Date()
         frameCountInWindow += 1
         DispatchQueue.main.async { self.totalFramesCaptured += 1 }
-        setCameraPower(on: false)
+        setInferenceWindow(open: false)
 
         onFrameCaptured?(pixelBuffer)
     }

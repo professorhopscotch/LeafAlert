@@ -7,6 +7,8 @@ struct PatrolView: View {
     @State private var savedBrightness: CGFloat?
     @State private var showingCorrection = false
     @State private var selectedCorrection: String?
+    @AppStorage("livePreviewEnabled") private var livePreviewEnabled = true
+    @State private var showPreviewToggleConfirm = false
 
     /// All possible plant labels for the correction picker.
     private static let allLabels: [(key: String, display: String)] = [
@@ -20,36 +22,83 @@ struct PatrolView: View {
     var body: some View {
         ZStack {
             if appState.isPatrolling {
-                // Live camera preview
-                CameraPreviewView(session: appState.captureEngine.session)
-                    .ignoresSafeArea()
+                if livePreviewEnabled {
+                    // Live camera preview
+                    CameraPreviewView(session: appState.captureEngine.session)
+                        .ignoresSafeArea()
 
-                // Bounding box overlay when detection has a valid region
-                if let detection = appState.lastDetection,
-                   detection.boundingBox != .zero {
-                    BoundingBoxOverlay(
-                        boundingBox: detection.boundingBox,
-                        label: DetectionFormatting.plantDisplayName(detection.plantType),
-                        confidence: detection.confidence
-                    )
-                    .ignoresSafeArea()
+                    // Bounding box overlay when detection has a valid region
+                    if let detection = appState.lastDetection,
+                       detection.boundingBox != .zero {
+                        BoundingBoxOverlay(
+                            boundingBox: detection.boundingBox,
+                            label: DetectionFormatting.plantDisplayName(detection.plantType),
+                            confidence: detection.confidence
+                        )
+                        .ignoresSafeArea()
+                    }
+                } else {
+                    // Dimmed background when live preview is off
+                    Color.black.opacity(appState.screenDimLevel)
+                        .ignoresSafeArea()
+
+                    VStack {
+                        Spacer()
+                        Image(systemName: "eye.fill")
+                            .font(.system(size: 48))
+                            .foregroundStyle(.green)
+                        Text("Patrolling\u{2026}")
+                            .font(.title2)
+                            .foregroundStyle(.white)
+                        Spacer()
+                    }
                 }
 
                 // Top status bar
                 VStack {
-                    HStack(spacing: 6) {
-                        Circle()
-                            .fill(appState.captureEngine.pipelineActive ? .green : .red)
-                            .frame(width: 8, height: 8)
-                        Text(appState.captureEngine.pipelineActive ? "Patrolling" : "Camera paused")
+                    HStack(spacing: 8) {
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(appState.captureEngine.pipelineActive ? .green : .red)
+                                .frame(width: 8, height: 8)
+                            Text(appState.captureEngine.pipelineActive ? "Patrolling" : "Camera paused")
+                                .font(.caption2.bold())
+                                .foregroundStyle(.white)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(.black.opacity(0.5))
+                        .clipShape(Capsule())
+
+                        // Long-press to toggle live preview
+                        Image(systemName: livePreviewEnabled ? "camera.fill" : "camera")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.7))
+                            .padding(8)
+                            .background(.black.opacity(0.5))
+                            .clipShape(Circle())
+                            .onLongPressGesture(minimumDuration: 0.8) {
+                                livePreviewEnabled.toggle()
+                                showPreviewToggleConfirm = true
+                                let generator = UIImpactFeedbackGenerator(style: .medium)
+                                generator.impactOccurred()
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                                    withAnimation { showPreviewToggleConfirm = false }
+                                }
+                            }
+                    }
+                    .padding(.top, 4)
+
+                    if showPreviewToggleConfirm {
+                        Text(livePreviewEnabled ? "Live preview on" : "Live preview off")
                             .font(.caption2.bold())
                             .foregroundStyle(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 4)
+                            .background(.black.opacity(0.6))
+                            .clipShape(Capsule())
+                            .transition(.opacity)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(.black.opacity(0.5))
-                    .clipShape(Capsule())
-                    .padding(.top, 4)
 
                     Spacer()
 
@@ -117,7 +166,11 @@ struct PatrolView: View {
             }
         }
         .onDisappear {
-            stopPatrol()
+            // Only stop patrol when truly navigating away, not when a sheet is presented.
+            // Sheets (like AR overlay) trigger onDisappear but the user hasn't left patrol.
+            if !showAROverlay {
+                stopPatrol()
+            }
         }
     }
 

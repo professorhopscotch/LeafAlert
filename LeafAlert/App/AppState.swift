@@ -20,7 +20,7 @@ final class AppState: ObservableObject {
 
     @Published var isPatrolling = false
     @Published var lastDetection: DetectionResult?
-    @Published var hasShownDisclaimer: Bool
+    @AppStorage("hasShownDisclaimer") var hasShownDisclaimer = false
 
     // MARK: - Settings (synced from UserDefaults via AppStorage)
 
@@ -33,12 +33,12 @@ final class AppState: ObservableObject {
 
     private var settingsCancellables = Set<AnyCancellable>()
     private var engineCancellables = Set<AnyCancellable>()
-    private let ciContext = CIContext()
+    /// Non-isolated helper for JPEG conversion on background queues.
+    private nonisolated let imageConverter = ImageConverter()
 
     // MARK: - Init
 
     init() {
-        self.hasShownDisclaimer = UserDefaults.standard.bool(forKey: "hasShownDisclaimer")
         observeSettingsChanges()
         forwardEngineChanges()
     }
@@ -58,9 +58,9 @@ final class AppState: ObservableObject {
                 self.captureEngine.markFrameProcessingComplete()
 
                 guard let result else { return }
-                let imageData = self.jpegData(from: pixelBuffer)
-                self.alertEngine.process(result)
+                let imageData = self.imageConverter.jpegData(from: pixelBuffer)
                 DispatchQueue.main.async {
+                    self.alertEngine.process(result)
                     self.lastDetection = result
                     self.detectionLogStore.save(result: result, imageData: imageData)
                 }
@@ -80,17 +80,9 @@ final class AppState: ObservableObject {
     /// Marks the first-launch disclaimer as shown.
     func markDisclaimerShown() {
         hasShownDisclaimer = true
-        UserDefaults.standard.set(true, forKey: "hasShownDisclaimer")
     }
 
     // MARK: - Private
-
-    /// Converts a CVPixelBuffer to JPEG Data.
-    private func jpegData(from pixelBuffer: CVPixelBuffer) -> Data? {
-        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
-        return ciContext.jpegRepresentation(of: ciImage, colorSpace: colorSpace, options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.85])
-    }
 
     private func syncSettingsToEngines() {
         alertEngine.sensitivityThreshold = Float(sensitivityThreshold)
@@ -137,6 +129,18 @@ final class AppState: ObservableObject {
                 self.captureEngine.isBatterySaverEnabled = newValue
             }
             .store(in: &settingsCancellables)
+    }
+}
+
+// MARK: - Image Conversion (non-isolated, safe to call from any queue)
+
+private final class ImageConverter: Sendable {
+    private let ciContext = CIContext()
+
+    func jpegData(from pixelBuffer: CVPixelBuffer) -> Data? {
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        return ciContext.jpegRepresentation(of: ciImage, colorSpace: colorSpace, options: [kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.85])
     }
 }
 

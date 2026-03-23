@@ -27,6 +27,7 @@
 		A10000019 /* DebugDashboardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000019; };
 		A10000020 /* CameraPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000020; };
 		A10000021 /* BoundingBoxOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000021; };
+		A10000022 /* FeedbackUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000022; };
 		B10000001 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B20000001; };
 		B10000002 /* Vision.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B20000002; };
 		B10000003 /* CoreML.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B20000003; };
@@ -61,6 +62,7 @@
 		A20000019 /* DebugDashboardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugDashboardView.swift; sourceTree = "<group>"; };
 		A20000020 /* CameraPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPreviewView.swift; sourceTree = "<group>"; };
 		A20000021 /* BoundingBoxOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundingBoxOverlay.swift; sourceTree = "<group>"; };
+		A20000022 /* FeedbackUploader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedbackUploader.swift; sourceTree = "<group>"; };
 A20000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A30000001 /* LeafAlert.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LeafAlert.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B20000001 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
@@ -145,6 +147,7 @@ A20000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.p
 			children = (
 				A20000006 /* DetectionLogStore.swift */,
 				A20000018 /* FeedbackExporter.swift */,
+				A20000022 /* FeedbackUploader.swift */,
 			);
 			path = Stores;
 			sourceTree = "<group>";
@@ -302,6 +305,7 @@ A20000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.p
 				A10000015 /* PlantInfo.swift in Sources */,
 				A10000016 /* DetectionFormatting.swift in Sources */,
 				A10000018 /* FeedbackExporter.swift in Sources */,
+				A10000022 /* FeedbackUploader.swift in Sources */,
 				A10000019 /* DebugDashboardView.swift in Sources */,
 				A10000020 /* CameraPreviewView.swift in Sources */,
 				A10000021 /* BoundingBoxOverlay.swift in Sources */,

@@ -72,20 +72,44 @@ struct ARViewContainer: UIViewRepresentable {
     /// Scale multiplier at the peak of the pulse animation.
     private static let pulseScaleFactor: Float = 1.15
 
+    final class Coordinator {
+        var pulseTimer: Timer?
+
+        func invalidatePulseTimer() {
+            pulseTimer?.invalidate()
+            pulseTimer = nil
+        }
+
+        deinit {
+            invalidatePulseTimer()
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
     func makeUIView(context: Context) -> ARView {
         let arView = ARView(frame: UIScreen.main.bounds)
         arView.automaticallyConfigureSession = false
+        guard ARWorldTrackingConfiguration.isSupported else {
+            return arView
+        }
         let config = ARWorldTrackingConfiguration()
         config.isAutoFocusEnabled = true
         arView.session.run(config)
         return arView
     }
 
-    static func dismantleUIView(_ uiView: ARView, coordinator: ()) {
+    static func dismantleUIView(_ uiView: ARView, coordinator: Coordinator) {
+        coordinator.invalidatePulseTimer()
         uiView.session.pause()
     }
 
     func updateUIView(_ uiView: ARView, context: Context) {
+        // Invalidate any existing pulse timer before removing anchors.
+        context.coordinator.invalidatePulseTimer()
+
         // Remove any previously placed overlay anchor to avoid duplicates.
         for anchor in uiView.scene.anchors where anchor.name == Self.anchorName {
             uiView.scene.removeAnchor(anchor)
@@ -94,12 +118,19 @@ struct ARViewContainer: UIViewRepresentable {
         let isGeneralWarning = boundingBox == .zero
         let distance = Self.overlayDistance
 
-        // Normalised coordinates: (0,0) is top-left, (1,1) is bottom-right.
-        // When the bounding box is zero, place a default indicator directly ahead.
-        let centreX: Float = isGeneralWarning ? 0.5 : Float(boundingBox.midX)
-        let centreY: Float = isGeneralWarning ? 0.5 : Float(boundingBox.midY)
-        let boxWidth: Float = isGeneralWarning ? 0.3 : Float(boundingBox.width)
-        let boxHeight: Float = isGeneralWarning ? 0.3 : Float(boundingBox.height)
+        // Vision saliency returns coordinates in pixel buffer space (origin bottom-left).
+        // The pixel buffer is landscape (rotated 90° relative to portrait screen).
+        // Swap X/Y and flip the new X to map from landscape buffer space to portrait screen space.
+        let rawX: Float = isGeneralWarning ? 0.5 : Float(boundingBox.midX)
+        let rawY: Float = isGeneralWarning ? 0.5 : Float(boundingBox.midY)
+        let rawW: Float = isGeneralWarning ? 0.3 : Float(boundingBox.width)
+        let rawH: Float = isGeneralWarning ? 0.3 : Float(boundingBox.height)
+
+        // Map from landscape buffer → portrait screen: screenX = rawY, screenY = rawX
+        let centreX: Float = isGeneralWarning ? 0.5 : rawY
+        let centreY: Float = isGeneralWarning ? 0.5 : rawX
+        let boxWidth: Float = isGeneralWarning ? 0.3 : rawH
+        let boxHeight: Float = isGeneralWarning ? 0.3 : rawW
 
         // Approximate horizontal and vertical field-of-view angles (radians) for a typical phone camera.
         let hFOV: Float = Float.pi / 3   // ~60 degrees
@@ -131,12 +162,11 @@ struct ARViewContainer: UIViewRepresentable {
         anchor.addChild(entity)
         uiView.scene.addAnchor(anchor)
 
-        startPulseAnimation(on: entity)
+        startPulseAnimation(on: entity, coordinator: context.coordinator)
     }
 
-    /// Adds a repeating pulse animation that smoothly toggles between normal size and
-    /// a slightly enlarged size using RealityKit transform animations with a Timer.
-    private func startPulseAnimation(on entity: ModelEntity) {
+    /// Adds a repeating pulse animation managed by the Coordinator's timer.
+    private func startPulseAnimation(on entity: ModelEntity, coordinator: Coordinator) {
         let originalTransform = entity.transform
         var scaledUpTransform = originalTransform
         scaledUpTransform.scale = originalTransform.scale * Self.pulseScaleFactor
@@ -146,8 +176,8 @@ struct ARViewContainer: UIViewRepresentable {
         entity.move(to: scaledUpTransform, relativeTo: entity.parent,
                     duration: halfCycle, timingFunction: .easeInOut)
 
-        // Reverse direction each half-cycle; stop when the entity is removed from the scene.
-        Timer.scheduledTimer(withTimeInterval: halfCycle, repeats: true) { timer in
+        // Store timer in coordinator so it can be invalidated on next update or dismantle.
+        coordinator.pulseTimer = Timer.scheduledTimer(withTimeInterval: halfCycle, repeats: true) { timer in
             guard entity.scene != nil else {
                 timer.invalidate()
                 return
