@@ -24,6 +24,7 @@ Output:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import pickle
@@ -33,6 +34,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -47,7 +49,9 @@ except ImportError:
     print("Install it with: pip install timm")
     sys.exit(1)
 
-import coremltools as ct
+# Ensure the sibling coreml_export module is importable regardless of cwd.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from coreml_export import export_coreml
 
 # ─── Config ──────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -68,6 +72,19 @@ IMAGENET_STD = [0.229, 0.224, 0.225]
 # Data augmentation params (matching train_model.py)
 MIXUP_ALPHA = 0.2
 CUTMIX_ALPHA = 1.0
+
+
+# ─── Reproducibility ─────────────────────────────────────────────────
+
+def seed_everything(seed: int = 42):
+    """Seed all RNGs (random, numpy, torch, cuda) and enable deterministic
+    cuDNN so training runs are reproducible."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 # ─── Student Model (from train_model.py) ─────────────────────────────
@@ -159,7 +176,15 @@ class SoftLabelDataset(Dataset):
     def __getitem__(self, idx):
         img, hard_label = self.dataset[idx]
         path = self.dataset.samples[idx][0]
-        soft_label = self.soft_labels[path]
+        try:
+            soft_label = self.soft_labels[path]
+        except KeyError:
+            raise KeyError(
+                f"No cached soft label for image:\n  {path}\n"
+                "This usually means new feedback images were added after the "
+                "soft-label cache was built. Regenerate the cache with:\n"
+                "  python3 scripts/distill_model.py --regenerate-soft-labels"
+            )
         return img, hard_label, torch.tensor(soft_label, dtype=torch.float32)
 
 
@@ -187,9 +212,13 @@ inference_transforms = transforms.Compose([
     transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
 ])
 
+# PARITY CONTRACT: the on-device Vision path uses .scaleFill (squash the full
+# frame to 224x224, NO crop). The student's eval transform MUST match exactly,
+# so we Resize to a square (squash) with no CenterCrop. Train-time augmentation
+# is left alone. (inference_transforms above is the teacher's soft-label
+# geometry and is intentionally unchanged.)
 test_transforms = transforms.Compose([
-    transforms.Resize((IMAGE_SIZE + 16, IMAGE_SIZE + 16)),
-    transforms.CenterCrop(IMAGE_SIZE),
+    transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
     transforms.ToTensor(),
     transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
 ])
@@ -308,51 +337,23 @@ def print_per_class_accuracy(class_correct, class_total, class_names):
 
 
 def convert_to_coreml(model, class_names: list, output_path: Path):
-    """Convert PyTorch model to Core ML format with proper normalization."""
-    model.eval()
-    model.cpu()
+    """Convert PyTorch model to Core ML with exact per-channel normalization
+    baked into the graph (via the shared export_coreml helper).
 
-    example_input = torch.randn(1, 3, IMAGE_SIZE, IMAGE_SIZE)
-    traced_model = torch.jit.trace(model, example_input)
-
-    scale = 1.0 / 255.0
-    bias = [-m / s for m, s in zip(IMAGENET_MEAN, IMAGENET_STD)]
-
-    mlmodel = ct.convert(
-        traced_model,
-        inputs=[
-            ct.ImageType(
-                name="image",
-                shape=(1, 3, IMAGE_SIZE, IMAGE_SIZE),
-                scale=1.0 / (255.0 * 0.226),
-                bias=bias,
-                color_layout="RGB",
-            )
-        ],
-        classifier_config=ct.ClassifierConfig(class_names),
-        minimum_deployment_target=ct.target.iOS17,
-    )
-
-    mlmodel.author = "LeafAlert"
-    mlmodel.short_description = (
+    The old uniform-0.226-std approximation is gone — normalization now lives
+    inside NormalizeWrapper, so the CoreML ImageType just passes raw pixels in.
+    """
+    short_description = (
         "Detects poison ivy, poison oak, and poison sumac from camera images. "
         "EfficientNet-B0 with spatial attention (v4-distilled) trained via knowledge "
         "distillation from a large teacher model on iNaturalist research-grade observations. "
         f"Classes: {', '.join(class_names)}"
     )
-    mlmodel.license = "For use with LeafAlert app"
-    mlmodel.version = "4.1.0"
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    if output_path.exists():
-        shutil.rmtree(output_path)
-    mlmodel.save(str(output_path))
-    print(f"\nCore ML model saved to: {output_path}")
-
-    total_size = sum(
-        f.stat().st_size for f in output_path.rglob("*") if f.is_file()
+    export_coreml(
+        model, class_names, output_path, IMAGE_SIZE,
+        short_description=short_description,
+        version="4.1.0",
     )
-    print(f"Model size: {total_size / 1024 / 1024:.1f} MB")
 
 
 # ─── Phase 1: Fine-tune Teacher ─────────────────────────────────────
@@ -485,19 +486,48 @@ def train_teacher(model_name: str, num_classes: int, class_names: list,
 
 # ─── Phase 2: Generate Soft Labels ──────────────────────────────────
 
+def dataset_fingerprint(dataset_path: Path) -> dict:
+    """Fingerprint a dataset directory by its image count + a sha256 over the
+    sorted list of relative paths. Lets us detect when new feedback images were
+    added (which invalidates a cached soft-label set keyed by absolute path)."""
+    dataset = datasets.ImageFolder(str(dataset_path))
+    rel_paths = sorted(
+        str(Path(p).relative_to(dataset_path)) for p, _ in dataset.samples
+    )
+    digest = hashlib.sha256("\n".join(rel_paths).encode("utf-8")).hexdigest()
+    return {"count": len(rel_paths), "sha256": digest}
+
+
 def generate_soft_labels(teacher: TeacherModel, dataset_path: Path,
                          device, temperature: float) -> dict:
     """Run teacher inference on all training images and cache logits."""
+    current_fp = dataset_fingerprint(dataset_path)
+
     if SOFT_LABELS_PATH.exists():
         print(f"\nLoading cached soft labels from: {SOFT_LABELS_PATH}")
         with open(SOFT_LABELS_PATH, "rb") as f:
             cached = pickle.load(f)
-        # Verify temperature matches
-        if cached.get("temperature") == temperature:
+
+        cached_fp = cached.get("fingerprint")
+        temp_ok = cached.get("temperature") == temperature
+        fp_ok = cached_fp == current_fp
+
+        if temp_ok and fp_ok:
             print(f"  Cached labels: {len(cached['labels'])} images, T={cached['temperature']}")
             return cached["labels"]
-        else:
-            print(f"  Temperature mismatch (cached={cached.get('temperature')}, requested={temperature}). Regenerating.")
+
+        if not temp_ok:
+            print(f"  Temperature mismatch (cached={cached.get('temperature')}, "
+                  f"requested={temperature}). Regenerating.")
+        if not fp_ok:
+            # The dataset changed (e.g. new feedback images). The cache is keyed
+            # by absolute path, so missing keys would crash SoftLabelDataset.
+            # Auto-regenerate to stay correct.
+            old_count = cached_fp.get("count") if isinstance(cached_fp, dict) else "unknown"
+            print(f"  Dataset fingerprint mismatch (cached count={old_count}, "
+                  f"current count={current_fp['count']}). The training set changed "
+                  f"since the cache was built — regenerating soft labels.\n"
+                  f"  (Run with --regenerate-soft-labels to force this explicitly.)")
 
     print(f"\n{'=' * 60}")
     print(f"Phase 2: Generating soft labels from teacher")
@@ -529,9 +559,14 @@ def generate_soft_labels(teacher: TeacherModel, dataset_path: Path,
             if processed % 200 == 0 or processed == len(dataset):
                 print(f"  Processed {processed}/{len(dataset)} images")
 
-    # Cache to disk
+    # Cache to disk (include the dataset fingerprint so a later run can detect
+    # added/removed images and regenerate instead of crashing on a missing key).
     CHECKPOINT_DIR.mkdir(parents=True, exist_ok=True)
-    cache_data = {"temperature": temperature, "labels": soft_labels}
+    cache_data = {
+        "temperature": temperature,
+        "fingerprint": current_fp,
+        "labels": soft_labels,
+    }
     with open(SOFT_LABELS_PATH, "wb") as f:
         pickle.dump(cache_data, f)
     print(f"  Soft labels cached to: {SOFT_LABELS_PATH}")
@@ -733,7 +768,7 @@ def train_student_distilled(student, soft_labels: dict, train_dataset,
 # ─── Phase 4: Evaluation Comparison ─────────────────────────────────
 
 def evaluate_comparison(student, test_loader, device, class_names,
-                        baseline_checkpoint=None):
+                        baseline_checkpoint=None, baseline_is_untrained=False):
     """Evaluate distilled student and optionally compare to baseline."""
     print(f"\n{'=' * 60}")
     print(f"Phase 4: Evaluation")
@@ -755,9 +790,21 @@ def evaluate_comparison(student, test_loader, device, class_names,
         print(f"Baseline student accuracy: {base_acc:.1%}")
         print_per_class_accuracy(base_cc, base_ct, class_names)
 
-        diff = acc - base_acc
-        sign = "+" if diff >= 0 else ""
-        print(f"\nDistillation improvement: {sign}{diff:.1%}")
+        if baseline_is_untrained:
+            # HONESTY FIX: the baseline is an untrained random-init student, so
+            # base_acc is chance-level. Reporting "distilled - untrained" as a
+            # "distillation improvement" would subtract noise and overstate the
+            # gain. Label it plainly instead of printing a bogus delta.
+            print(f"\nBaseline is UNTRAINED (random init) — its accuracy is "
+                  f"chance-level.")
+            print(f"This is NOT a fair distillation comparison; no improvement "
+                  f"delta is reported.")
+            print(f"For an honest delta, train a real cross-entropy-only student "
+                  f"and pass it via --baseline-checkpoint.")
+        else:
+            diff = acc - base_acc
+            sign = "+" if diff >= 0 else ""
+            print(f"\nDistillation improvement: {sign}{diff:.1%}")
     else:
         print("\nNo baseline checkpoint found for comparison.")
         print("To compare, save a baseline with: --save-baseline")
@@ -820,6 +867,9 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    # Deterministic seeding for reproducible runs
+    seed_everything(42)
 
     print("=" * 60)
     print("LeafAlert PlantDetector — Knowledge Distillation Training")
@@ -900,15 +950,24 @@ def main():
         torch.cuda.empty_cache()
 
     # ─── Optionally save baseline ─────────────────────────────────
+    # HONESTY FIX: this saves an UNTRAINED random-init student. Comparing the
+    # distilled model against it does NOT measure a "distillation improvement"
+    # (it would just subtract chance-level accuracy). We therefore mark the
+    # saved checkpoint as untrained so evaluate_comparison labels it honestly
+    # instead of reporting a bogus delta. A real apples-to-apples baseline would
+    # require training a separate cross-entropy-only student, which this flag
+    # intentionally does NOT do.
     baseline_path = args.baseline_checkpoint
+    baseline_is_untrained = False
     if args.save_baseline:
         baseline_path = str(CHECKPOINT_DIR / "student_baseline.pth")
-        print(f"\nSaving baseline student checkpoint...")
+        baseline_is_untrained = True
+        print(f"\nSaving baseline student checkpoint (UNTRAINED random init)...")
         baseline_student = PlantDetectorNet(num_classes)
-        # Train baseline briefly with standard CE to have a fair comparison
-        # (or just save the untrained weights as a reference)
         torch.save(baseline_student.state_dict(), baseline_path)
         print(f"  Saved to: {baseline_path}")
+        print(f"  NOTE: this baseline is untrained — its accuracy is chance-level,")
+        print(f"        so it is NOT a fair distillation comparison.")
 
     # ─── Phase 3: Student distillation ────────────────────────────
     student = PlantDetectorNet(num_classes)
@@ -930,7 +989,8 @@ def main():
 
     # ─── Phase 4: Evaluation ──────────────────────────────────────
     evaluate_comparison(student, test_loader, device, class_names,
-                        baseline_checkpoint=baseline_path)
+                        baseline_checkpoint=baseline_path,
+                        baseline_is_untrained=baseline_is_untrained)
 
     # ─── CoreML Export ────────────────────────────────────────────
     if not args.no_export:

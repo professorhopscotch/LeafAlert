@@ -3,12 +3,14 @@ import SwiftUI
 /// Live patrol screen. Dims the display and runs continuous detection.
 struct PatrolView: View {
     @EnvironmentObject private var appState: AppState
+    @Environment(\.scenePhase) private var scenePhase
     @State private var showAROverlay = false
     @State private var savedBrightness: CGFloat?
     @State private var showingCorrection = false
     @State private var selectedCorrection: String?
     @AppStorage("livePreviewEnabled") private var livePreviewEnabled = true
     @State private var showPreviewToggleConfirm = false
+    @State private var showCaptureFlash = false
 
     /// All possible plant labels for the correction picker.
     private static let allLabels: [(key: String, display: String)] = [
@@ -66,9 +68,22 @@ struct PatrolView: View {
                                 .foregroundStyle(.white)
                         }
                         .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
+                        .padding(.vertical, 4)
                         .background(.black.opacity(0.5))
                         .clipShape(Capsule())
+
+                        if DataRecorder.shared.isRecording {
+                            HStack(spacing: 4) {
+                                Circle().fill(.red).frame(width: 8, height: 8)
+                                Text("REC")
+                                    .font(.caption2.bold())
+                                    .foregroundStyle(.white)
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 4)
+                            .background(.black.opacity(0.5))
+                            .clipShape(Capsule())
+                        }
 
                         // Long-press to toggle live preview
                         Image(systemName: livePreviewEnabled ? "camera.fill" : "camera")
@@ -135,6 +150,14 @@ struct PatrolView: View {
                 }
             }
 
+            // Green edge flash on capture (only when debug frame saving is on)
+            if showCaptureFlash && appState.debugSaveFrames {
+                RoundedRectangle(cornerRadius: 0)
+                    .stroke(.green, lineWidth: 6)
+                    .ignoresSafeArea()
+                    .allowsHitTesting(false)
+            }
+
             // Feedback card pinned to bottom
             if let detection = appState.lastDetection {
                 VStack {
@@ -165,6 +188,34 @@ struct PatrolView: View {
                 appState.captureEngine.stop()
             }
         }
+        .onChange(of: appState.captureEngine.totalFramesCaptured) { _, _ in
+            guard appState.debugSaveFrames else { return }
+            withAnimation(.easeIn(duration: 0.1)) { showCaptureFlash = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                withAnimation(.easeOut(duration: 0.25)) { showCaptureFlash = false }
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            // Keep the dim + keep-awake only while on screen. When the app leaves
+            // the foreground, restore the user's real brightness and let the
+            // device sleep normally; re-apply on return so a backgrounded patrol
+            // doesn't leak a dimmed screen or drain the battery locked-on.
+            guard appState.isPatrolling else { return }
+            switch phase {
+            case .active:
+                if savedBrightness != nil {
+                    UIScreen.main.brightness = CGFloat(1.0 - appState.screenDimLevel)
+                }
+                UIApplication.shared.isIdleTimerDisabled = true
+            case .inactive, .background:
+                if let brightness = savedBrightness {
+                    UIScreen.main.brightness = brightness
+                }
+                UIApplication.shared.isIdleTimerDisabled = false
+            @unknown default:
+                break
+            }
+        }
         .onDisappear {
             // Only stop patrol when truly navigating away, not when a sheet is presented.
             // Sheets (like AR overlay) trigger onDisappear but the user hasn't left patrol.
@@ -179,6 +230,8 @@ struct PatrolView: View {
     private func startPatrol() {
         savedBrightness = UIScreen.main.brightness
         UIScreen.main.brightness = CGFloat(1.0 - appState.screenDimLevel)
+        // Prevent auto-lock from killing an active patrol.
+        UIApplication.shared.isIdleTimerDisabled = true
         appState.startPatrol()
     }
 
@@ -188,6 +241,7 @@ struct PatrolView: View {
             UIScreen.main.brightness = brightness
             savedBrightness = nil
         }
+        UIApplication.shared.isIdleTimerDisabled = false
         appState.stopPatrol()
     }
 

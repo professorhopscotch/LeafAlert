@@ -40,12 +40,17 @@ final class FeedbackExporter: ObservableObject {
     /// The bookmarked iCloud Drive folder URL (security-scoped).
     private var syncFolderURL: URL?
 
+    /// Read-only access to the sync folder URL for other components (e.g. DataRecorder).
+    /// Caller is responsible for managing security-scoped resource access.
+    var configuredSyncFolderURL: URL? { syncFolderURL }
+
     private var bookmarkURL: URL {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         return docs.appendingPathComponent(".sync_folder_bookmark")
     }
 
     /// Save a user-picked folder URL as the sync destination.
+    /// Copies any existing local feedback into the new sync folder.
     func setSyncFolder(_ url: URL) {
         guard url.startAccessingSecurityScopedResource() else { return }
         defer { url.stopAccessingSecurityScopedResource() }
@@ -63,6 +68,31 @@ final class FeedbackExporter: ObservableObject {
         DispatchQueue.main.async {
             self.hasSyncFolder = true
             self.syncFolderName = url.lastPathComponent
+        }
+
+        // Copy existing local feedback to the new sync folder
+        ioQueue.async { [self] in
+            copyExistingFeedbackToSyncFolder(url)
+        }
+    }
+
+    /// Copies all existing local feedback files into the newly-configured sync folder.
+    private func copyExistingFeedbackToSyncFolder(_ syncURL: URL) {
+        guard syncURL.startAccessingSecurityScopedResource() else { return }
+        defer { syncURL.stopAccessingSecurityScopedResource() }
+
+        let localDir = feedbackDirectoryURL
+        let cloudDir = syncURL.appendingPathComponent("feedback")
+        try? FileManager.default.createDirectory(at: cloudDir, withIntermediateDirectories: true)
+
+        let fm = FileManager.default
+        guard let localFiles = try? fm.contentsOfDirectory(at: localDir, includingPropertiesForKeys: nil) else { return }
+
+        for file in localFiles {
+            let dest = cloudDir.appendingPathComponent(file.lastPathComponent)
+            if !fm.fileExists(atPath: dest.path) {
+                try? fm.copyItem(at: file, to: dest)
+            }
         }
     }
 

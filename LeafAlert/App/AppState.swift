@@ -28,6 +28,7 @@ final class AppState: ObservableObject {
     @AppStorage("audioAlertsEnabled") var audioAlertsEnabled = true
     @AppStorage("screenDimLevel") var screenDimLevel: Double = 0.7
     @AppStorage("batterySaverEnabled") var batterySaverEnabled = false
+    @AppStorage("debugSaveFrames") var debugSaveFrames = false
 
     // MARK: - Private
 
@@ -51,17 +52,49 @@ final class AppState: ObservableObject {
         inferenceEngine.loadModel()
         detectionLogStore.requestLocationPermission()
 
-        captureEngine.onFrameCaptured = { [weak self] pixelBuffer in
-            self?.inferenceEngine.classify(pixelBuffer: pixelBuffer) { result in
+        captureEngine.onFrameCaptured = { [weak self] pixelBuffer, captureContext in
+            guard let self else { return }
+            let saveFrames = self.debugSaveFrames
+
+            self.inferenceEngine.classify(pixelBuffer: pixelBuffer) { [weak self] result in
                 guard let self else { return }
                 // Signal to the capture engine that processing is done so it can send the next frame.
                 self.captureEngine.markFrameProcessingComplete()
 
+                // Save every captured frame to disk when debug mode is on.
+                if saveFrames {
+                    let jpegForDebug = self.imageConverter.jpegData(from: pixelBuffer)
+                    DebugFrameSaver.shared.save(
+                        jpegData: jpegForDebug,
+                        classification: result?.plantType,
+                        context: captureContext
+                    )
+                }
+
                 guard let result else { return }
+                DataRecorder.shared.logEvent(
+                    "detection",
+                    details: "class=\(result.plantType) conf=\(String(format: "%.3f", result.confidence))"
+                )
                 let imageData = self.imageConverter.jpegData(from: pixelBuffer)
                 DispatchQueue.main.async {
+                    // A late completion from an in-flight inference must not mutate
+                    // state or fire alerts after the user stopped the patrol.
+                    guard self.isPatrolling else { return }
+
                     self.alertEngine.process(result)
-                    self.lastDetection = result
+
+                    // Only surface the warning card / bounding box for alert-worthy
+                    // detections: a toxic class at or above the sensitivity threshold.
+                    // This mirrors AlertEngine.process's own gating. Safe plants and
+                    // sub-threshold detections are still logged, just not surfaced.
+                    if InferenceEngine.toxicLabels.contains(result.plantType)
+                        && result.confidence >= Float(self.sensitivityThreshold) {
+                        self.lastDetection = result
+                    }
+
+                    // Log every detection regardless of gating so the map/history
+                    // records everything.
                     self.detectionLogStore.save(result: result, imageData: imageData)
                 }
             }
@@ -74,6 +107,13 @@ final class AppState: ObservableObject {
     /// Stops the patrol pipeline.
     func stopPatrol() {
         captureEngine.stop()
+        // Do NOT nil out captureEngine.onFrameCaptured here: it is read on the
+        // capture queue while this runs on the main actor, and clearing it mid-
+        // flight can strand CaptureEngine.isProcessingFrame (set before the
+        // callback, cleared only inside it) — permanently dropping frames on the
+        // next patrol. The `guard self.isPatrolling` check inside the inference
+        // completion already neutralizes any late frame, and
+        // markFrameProcessingComplete() still runs first to free the pipeline.
         isPatrolling = false
     }
 

@@ -25,6 +25,9 @@ from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 
+# Maximum accepted request body size (bytes). Guards against memory DoS.
+MAX_BODY_SIZE = 25 * 1024 * 1024  # 25 MB
+
 # Bonjour registration via pyobjc (macOS built-in)
 try:
     from Foundation import NSNetService, NSRunLoop, NSDate
@@ -64,11 +67,54 @@ class FeedbackHandler(BaseHTTPRequestHandler):
         else:
             self._respond(400, {"error": "unsupported content type"})
 
+    def _read_body(self):
+        """Read the request body, validating Content-Length and capping size.
+
+        Returns the body bytes, or None if a response was already sent
+        (bad header -> 400, oversized -> 413).
+        """
+        raw_length = self.headers.get("Content-Length", "0")
+        try:
+            content_length = int(raw_length)
+        except (TypeError, ValueError):
+            self._respond(400, {"error": "invalid Content-Length"})
+            return None
+
+        if content_length < 0:
+            self._respond(400, {"error": "invalid Content-Length"})
+            return None
+
+        if content_length > MAX_BODY_SIZE:
+            self._respond(413, {"error": "request body too large"})
+            return None
+
+        return self.rfile.read(content_length)
+
+    def _safe_image_path(self, output_dir, filename):
+        """Resolve a client-supplied filename to a path safely contained in
+        output_dir. Returns the path, or None if the name is unsafe (a
+        response is sent in that case)."""
+        # Only ever trust the basename — strip any directory components.
+        base = Path(filename).name
+        if not base or base in (".", "..") or base.startswith("."):
+            self._respond(400, {"error": "invalid filename"})
+            return None
+
+        image_path = output_dir / base
+        resolved_dir = output_dir.resolve()
+        resolved_path = image_path.resolve()
+        if not resolved_path.is_relative_to(resolved_dir):
+            self._respond(400, {"error": "invalid filename"})
+            return None
+
+        return image_path
+
     def _handle_multipart(self):
         """Handle multipart upload: image file + JSON metadata."""
         content_type = self.headers["Content-Type"]
-        content_length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(content_length)
+        body = self._read_body()
+        if body is None:
+            return
 
         # Parse boundary
         boundary = content_type.split("boundary=")[-1].strip()
@@ -98,9 +144,13 @@ class FeedbackHandler(BaseHTTPRequestHandler):
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Save image
-        filename = image_filename or metadata.get("filename", f"upload_{datetime.now().isoformat()}.jpg")
+        raw_filename = image_filename or metadata.get("filename", f"upload_{datetime.now().isoformat()}.jpg")
+        # Sanitize: take only the basename and confirm containment in output_dir.
+        image_path = self._safe_image_path(output_dir, raw_filename)
+        if image_path is None:
+            return
+        filename = image_path.name
         if image_data:
-            image_path = output_dir / filename
             image_path.write_bytes(image_data)
             print(f"  Saved image: {filename} ({len(image_data)} bytes)")
 
@@ -110,7 +160,7 @@ class FeedbackHandler(BaseHTTPRequestHandler):
         entries = manifest.get("entries", [])
 
         # Deduplicate by filename
-        existing = {e["filename"] for e in entries}
+        existing = {e.get("filename") for e in entries if e.get("filename") is not None}
         if filename not in existing:
             entry = {
                 "filename": filename,
@@ -131,15 +181,25 @@ class FeedbackHandler(BaseHTTPRequestHandler):
 
     def _handle_json_batch(self):
         """Handle a batch metadata sync (no images)."""
-        content_length = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(content_length))
+        raw_body = self._read_body()
+        if raw_body is None:
+            return
+        try:
+            body = json.loads(raw_body)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._respond(400, {"error": "invalid JSON"})
+            return
         entries = body.get("entries", [])
 
         output_dir = Path(self.server.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
         manifest = self._read_manifest()
-        existing = {e["filename"] for e in manifest.get("entries", [])}
+        existing = {
+            e.get("filename")
+            for e in manifest.get("entries", [])
+            if e.get("filename") is not None
+        }
         added = 0
         for entry in entries:
             if entry.get("filename") not in existing:

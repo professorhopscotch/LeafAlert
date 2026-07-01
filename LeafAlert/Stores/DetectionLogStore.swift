@@ -55,6 +55,7 @@ final class DetectionLogStore: ObservableObject {
             timestamp: result.timestamp,
             latitude: location?.coordinate.latitude ?? 0,
             longitude: location?.coordinate.longitude ?? 0,
+            hasLocation: location != nil,
             confidence: result.confidence,
             plantType: result.plantType,
             imageThumbData: imageData
@@ -71,6 +72,20 @@ final class DetectionLogStore: ObservableObject {
         log.feedbackStatus = status
         log.correctedLabel = correctedLabel
         try? modelContext.save()
+
+        // Export the feedback (image + manifest entry) for the retraining loop.
+        // A "confirmed" tap exports the original prediction as the training label;
+        // a "corrected" tap exports the user-supplied label.
+        FeedbackExporter.shared.exportFeedback(
+            imageData: log.imageThumbData,
+            originalPrediction: log.plantType,
+            correctedLabel: log.correctedLabel ?? log.plantType,
+            feedbackStatus: status,
+            confidence: log.confidence,
+            latitude: log.latitude,
+            longitude: log.longitude,
+            timestamp: log.timestamp
+        )
     }
 
     /// Fetches all detection logs, most recent first.
@@ -93,8 +108,16 @@ final class DetectionLogStore: ObservableObject {
 
     // MARK: - Location
 
-    /// Requests location permission for geotagging detections.
+    /// Requests location permission for geotagging detections and begins
+    /// receiving location fixes so `locationManager.location` is populated.
     func requestLocationPermission() {
+        locationManager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
         locationManager.requestWhenInUseAuthorization()
+        locationManager.startUpdatingLocation()
+    }
+
+    /// Stops receiving location fixes (e.g. when patrol ends) to conserve power.
+    func stopLocationUpdates() {
+        locationManager.stopUpdatingLocation()
     }
 }

@@ -6,10 +6,11 @@ import SwiftData
 /// Works fully offline — no network tiles needed for base map.
 struct PatrolMapView: View {
     @Query(sort: \DetectionLog.timestamp, order: .reverse) private var logs: [DetectionLog]
-    @Environment(\.modelContext) private var modelContext
+    @EnvironmentObject private var appState: AppState
 
     @State private var selectedLog: DetectionLog?
     @State private var filterMode: FilterMode = .all
+    @State private var mapPosition: MapCameraPosition = .automatic
 
     enum FilterMode: String, CaseIterable {
         case all = "Show All"
@@ -24,14 +25,21 @@ struct PatrolMapView: View {
         case .confirmed:
             return logs.filter { $0.feedbackStatus == "confirmed" || $0.feedbackStatus == "corrected" }
         case .unconfirmed:
-            return logs.filter { $0.feedbackStatus == "none" }
+            // Exhaustive complement of "confirmed" — includes "none" and
+            // "discarded" so dismissed logs don't silently vanish from both views.
+            return logs.filter { $0.feedbackStatus != "confirmed" && $0.feedbackStatus != "corrected" }
         }
+    }
+
+    /// Logs that have a real GPS fix and so can be plotted on the map.
+    private var mappableLogs: [DetectionLog] {
+        filteredLogs.filter { $0.hasLocation }
     }
 
     var body: some View {
         ZStack(alignment: .top) {
-            Map {
-                ForEach(filteredLogs) { log in
+            Map(position: $mapPosition) {
+                ForEach(mappableLogs) { log in
                     Annotation(
                         DetectionFormatting.plantDisplayName(log.plantType),
                         coordinate: CLLocationCoordinate2D(
@@ -62,6 +70,9 @@ struct PatrolMapView: View {
         }
         .sheet(item: $selectedLog) { log in
             detailPopup(for: log)
+        }
+        .onAppear {
+            centerOnRecentDetections()
         }
     }
 
@@ -156,17 +167,52 @@ struct PatrolMapView: View {
             )
     }
 
+    // MARK: - Map Positioning
+
+    /// Centers the map on the most recent detections, fitting all pins from the
+    /// last patrol session (last 30 minutes) or the 10 most recent if older.
+    private func centerOnRecentDetections() {
+        let validLogs = filteredLogs.filter { $0.hasLocation }
+        guard !validLogs.isEmpty else { return }
+
+        // Use detections from the last 30 min, or top 10 if none are recent
+        let cutoff = Date().addingTimeInterval(-30 * 60)
+        let recent = validLogs.filter { $0.timestamp > cutoff }
+        let pins = recent.isEmpty ? Array(validLogs.prefix(10)) : recent
+
+        let lats = pins.map(\.latitude)
+        let lons = pins.map(\.longitude)
+
+        let center = CLLocationCoordinate2D(
+            latitude: (lats.min()! + lats.max()!) / 2,
+            longitude: (lons.min()! + lons.max()!) / 2
+        )
+
+        let latSpan = max((lats.max()! - lats.min()!) * 1.5, 0.005)
+        let lonSpan = max((lons.max()! - lons.min()!) * 1.5, 0.005)
+
+        mapPosition = .region(MKCoordinateRegion(
+            center: center,
+            span: MKCoordinateSpan(latitudeDelta: latSpan, longitudeDelta: lonSpan)
+        ))
+    }
+
     // MARK: - Helpers
 
     private func submitFeedback(log: DetectionLog, status: String, correctedLabel: String? = nil) {
-        log.feedbackStatus = status
-        log.correctedLabel = correctedLabel
-        try? modelContext.save()
+        // Route through the shared store so feedback is also exported for the
+        // retraining loop, matching PatrolView's confirm/correct path.
+        appState.detectionLogStore.submitFeedback(
+            logID: log.id,
+            status: status,
+            correctedLabel: correctedLabel
+        )
     }
 }
 
 #Preview {
     NavigationStack {
         PatrolMapView()
+            .environmentObject(AppState())
     }
 }

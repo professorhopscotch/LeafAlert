@@ -114,11 +114,16 @@ final class InferenceEngine: ObservableObject {
             }
 
             // --- Pass 1: Original orientation ---
+            // Train/serve crop parity: `.scaleFill` squashes the full frame to the
+            // model's 224x224 input with no crop, matching the Python val transform
+            // (Resize((224,224))). `.centerCrop` would discard the long-edge margins
+            // and crop out toxic plants near the frame edge, lowering recall — the
+            // dangerous failure mode for a safety app.
             let originalHandler = VNImageRequestHandler(
                 cvPixelBuffer: pixelBuffer, options: [:]
             )
             let originalRequest = VNCoreMLRequest(model: vnModel)
-            originalRequest.imageCropAndScaleOption = .centerCrop
+            originalRequest.imageCropAndScaleOption = .scaleFill
 
             // --- Pass 2: Horizontally flipped (zero-copy via orientation) ---
             let flippedHandler = VNImageRequestHandler(
@@ -127,7 +132,8 @@ final class InferenceEngine: ObservableObject {
                 options: [:]
             )
             let flippedRequest = VNCoreMLRequest(model: vnModel)
-            flippedRequest.imageCropAndScaleOption = .centerCrop
+            // Same parity contract as Pass 1 — squash, don't crop.
+            flippedRequest.imageCropAndScaleOption = .scaleFill
 
             do {
                 try originalHandler.perform([originalRequest])
@@ -197,6 +203,9 @@ final class InferenceEngine: ObservableObject {
     private static func saliencyBoundingBox(pixelBuffer: CVPixelBuffer) -> CGRect {
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, options: [:])
         let request = VNGenerateAttentionBasedSaliencyImageRequest()
+        // Saliency runs on the full frame (this request type has no
+        // imageCropAndScaleOption); its normalised box already lives in the
+        // same full-frame space the `.scaleFill` classifier path consumes.
         do {
             try handler.perform([request])
         } catch {

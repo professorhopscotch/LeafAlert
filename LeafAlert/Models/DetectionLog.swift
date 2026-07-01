@@ -9,6 +9,9 @@ final class DetectionLog {
     var timestamp: Date
     var latitude: Double
     var longitude: Double
+    /// True when latitude/longitude reflect a real GPS fix. When false, the
+    /// (0,0) coordinate means "no fix" rather than a literal location.
+    var hasLocation: Bool = false
     var confidence: Float
     var plantType: String
     var feedbackStatus: String = "none"
@@ -22,6 +25,7 @@ final class DetectionLog {
         timestamp: Date = Date(),
         latitude: Double = 0,
         longitude: Double = 0,
+        hasLocation: Bool = false,
         confidence: Float = 0,
         plantType: String = "",
         feedbackStatus: String = "none",
@@ -32,6 +36,7 @@ final class DetectionLog {
         self.timestamp = timestamp
         self.latitude = latitude
         self.longitude = longitude
+        self.hasLocation = hasLocation
         self.confidence = confidence
         self.plantType = plantType
         self.feedbackStatus = feedbackStatus

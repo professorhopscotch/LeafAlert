@@ -103,10 +103,13 @@ final class FeedbackUploader: NSObject, ObservableObject {
         filename: String
     ) {
         guard let serverURL else { return }
-        guard !syncedFilenames.contains(filename) else { return }
 
+        // Confine the de-dup check to syncQueue: syncedFilenames is not
+        // thread-safe and may be mutated concurrently from upload completions.
         syncQueue.async { [weak self] in
-            self?.uploadSingleEntry(
+            guard let self else { return }
+            guard !self.syncedFilenames.contains(filename) else { return }
+            self.uploadSingleEntry(
                 to: serverURL,
                 imageData: imageData,
                 metadata: metadata,
@@ -138,6 +141,8 @@ final class FeedbackUploader: NSObject, ObservableObject {
 
         DispatchQueue.main.async { self.pendingCount = pending.count }
 
+        // successCount is mutated only on syncQueue (every completion hops
+        // back to syncQueue before touching it), so no atomic is needed.
         var successCount = 0
         let group = DispatchGroup()
 
@@ -151,29 +156,47 @@ final class FeedbackUploader: NSObject, ObservableObject {
             let imageData = try? Data(contentsOf: imageURL)
 
             uploadSingleEntry(to: url, imageData: imageData, metadata: entry, filename: filename) { [weak self] success in
-                if success {
-                    successCount += 1
-                    self?.syncedFilenames.insert(filename)
-                    DispatchQueue.main.async {
-                        self?.syncedCount = self?.syncedFilenames.count ?? 0
-                        self?.pendingCount = max(0, (self?.pendingCount ?? 1) - 1)
+                guard let self else { group.leave(); return }
+                // Hop onto syncQueue before touching any shared mutable state.
+                self.syncQueue.async {
+                    if success {
+                        // insert() returns false if already present, which guards
+                        // against double-counting if the same entry somehow
+                        // completes twice.
+                        let inserted = self.syncedFilenames.insert(filename).inserted
+                        if inserted {
+                            successCount += 1
+                        }
+                        let syncedTotal = self.syncedFilenames.count
+                        DispatchQueue.main.async {
+                            self.syncedCount = syncedTotal
+                            self.pendingCount = max(0, self.pendingCount - 1)
+                        }
                     }
+                    group.leave()
                 }
-                group.leave()
             }
         }
 
-        group.wait()
+        // Finalize on syncQueue once all uploads have completed. Using
+        // notify (rather than a blocking wait) keeps syncQueue free to run
+        // the per-completion hops above; blocking here would deadlock the
+        // serial queue against its own pending work.
+        group.notify(queue: syncQueue) {
+            self.saveSyncState()
 
-        saveSyncState()
-
-        DispatchQueue.main.async {
-            self.isSyncing = false
-            self.lastSyncDate = Date()
-            if successCount == pending.count {
-                self.lastError = nil
-            } else {
-                self.lastError = "Synced \(successCount)/\(pending.count)"
+            // successCount is read on syncQueue, where it is mutated, so this
+            // is a consistent snapshot; UI updates are published to main.
+            let finalSuccessCount = successCount
+            let total = pending.count
+            DispatchQueue.main.async {
+                self.isSyncing = false
+                self.lastSyncDate = Date()
+                if finalSuccessCount == total {
+                    self.lastError = nil
+                } else {
+                    self.lastError = "Synced \(finalSuccessCount)/\(total)"
+                }
             }
         }
     }
@@ -220,15 +243,25 @@ final class FeedbackUploader: NSObject, ObservableObject {
             let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
             let success = error == nil && statusCode == 200
 
-            if success {
-                self?.syncedFilenames.insert(filename)
-                self?.saveSyncState()
-                DispatchQueue.main.async {
-                    self?.syncedCount = self?.syncedFilenames.count ?? 0
+            // When a completion handler is supplied (the performSync path), it
+            // owns all ledger mutation on syncQueue; doing it here too would
+            // double-insert. Only manage the ledger ourselves on the standalone
+            // (uploadEntry) path, and always confine that to syncQueue since the
+            // URLSession completion runs on its own delegate queue.
+            if let completion {
+                completion(success)
+            } else if success, let self {
+                self.syncQueue.async {
+                    let inserted = self.syncedFilenames.insert(filename).inserted
+                    if inserted {
+                        self.saveSyncState()
+                    }
+                    let syncedTotal = self.syncedFilenames.count
+                    DispatchQueue.main.async {
+                        self.syncedCount = syncedTotal
+                    }
                 }
             }
-
-            completion?(success)
         }
         task.resume()
     }

@@ -34,3 +34,22 @@ MLModelCandidates/
 TrainingData/
 TrainingData_split/
 xcuserdata/
+
+# ML training/distillation pipeline artifacts (large, not for commit)
+# NOTE: none of these match the shipped model
+# LeafAlert/Resources/MLModels/PlantDetector.mlpackage, which must stay tracked.
+# Python virtualenv for the training pipeline
+.venv/
+# teacher/student checkpoints (~1.2GB)
+checkpoints/
+# PyTorch weight files
+*.pth
+# pickled training artifacts
+*.pkl
+# training run logs (e.g. training_v4_expanded_log.txt)
+training_*_log.txt
+
+# Python caches / test artifacts
+__pycache__/
+*.pyc
+.pytest_cache/

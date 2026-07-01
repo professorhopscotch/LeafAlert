@@ -203,6 +203,9 @@ def count_existing():
     """Count existing images per class."""
     print("Current dataset counts:")
     for split_name, split_dir in [("train", TRAIN_DIR), ("test", TEST_DIR)]:
+        if not split_dir.is_dir():
+            print(f"  {split_name}: (none — directory not found)")
+            continue
         for class_name in sorted(os.listdir(split_dir)):
             class_dir = split_dir / class_name
             if class_dir.is_dir():

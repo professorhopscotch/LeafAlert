@@ -130,7 +130,12 @@ struct FolderPickerView: UIViewControllerRepresentable {
 
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
         let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder])
-        picker.directoryURL = FileManager.default.url(forUbiquityContainerIdentifier: nil)
+        // Default to the local feedback folder so the user starts near their captures.
+        // Falls back gracefully if the directory doesn't exist yet.
+        let feedbackDir = FeedbackExporter.shared.feedbackDirectoryURL
+        if FileManager.default.fileExists(atPath: feedbackDir.path) {
+            picker.directoryURL = feedbackDir
+        }
         picker.delegate = context.coordinator
         return picker
     }

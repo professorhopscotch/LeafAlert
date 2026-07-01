@@ -69,6 +69,12 @@ def ingest_feedback(feedback_dir: Path, train_dir: Path, dry_run: bool = False):
             skipped += 1
             continue
 
+        # A "not_a_plant" correction is a strong false-positive signal: the image
+        # is a valid negative/safe example, so route it to the safe_plants class.
+        if label == "not_a_plant":
+            print(f"  Remap 'not_a_plant' → safe_plants: {filename}")
+            label = "safe_plants"
+
         # Skip non-trainable labels
         if label not in VALID_LABELS:
             print(f"  Skip (non-trainable label '{label}'): {filename}")

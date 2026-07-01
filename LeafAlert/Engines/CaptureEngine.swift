@@ -2,6 +2,14 @@ import AVFoundation
 import CoreMotion
 import Combine
 
+/// Motion state at the moment a frame was captured.
+struct CaptureContext {
+    let netAcceleration: Double
+    let rotationRate: Double
+    let trigger: CaptureEngine.CaptureTrigger
+    let timestamp: Date
+}
+
 /// Manages camera capture with physics-based timing and duty-cycled power management.
 ///
 /// # Power Architecture
@@ -27,9 +35,18 @@ import Combine
 /// detection to captured frame is ~43 ms.
 final class CaptureEngine: NSObject, ObservableObject {
 
+    enum CaptureTrigger: String { case apogee, stillness, forced }
+
+    /// Camera authorization state, for the UI to surface an "access needed" message.
+    enum CameraPermission { case unknown, authorized, denied }
+
     // MARK: - Published State
 
     @Published private(set) var isRunning = false
+
+    /// Current camera authorization state. When `.denied`, the UI should prompt the
+    /// user to enable camera access in Settings — the capture pipeline cannot run.
+    @Published private(set) var cameraPermission: CameraPermission = .unknown
 
     /// Number of frames captured in the current 60-second window, for UI diagnostics.
     @Published private(set) var capturesPerMinute: Int = 0
@@ -49,6 +66,9 @@ final class CaptureEngine: NSObject, ObservableObject {
     /// Total frames captured since patrol started.
     @Published var totalFramesCaptured: Int = 0
 
+    /// Current rotation rate magnitude (rad/s). For debug display.
+    @Published private(set) var currentRotationRate: Double = 0.0
+
     // MARK: - Configuration (thread-safe via configLock)
 
     private let configLock = NSLock()
@@ -58,6 +78,7 @@ final class CaptureEngine: NSObject, ObservableObject {
     private var _maxCaptureWindowDuration: TimeInterval = 1.5
     private var _forcedCaptureInterval: TimeInterval = 4.0
     private var _stillnessThreshold: Double = 0.08
+    private var _rotationRateThreshold: Double = 1.5  // rad/s — reject captures above this
     private var _isBatterySaverEnabled = false
 
     /// Minimum interval between captures (cooldown). Camera stays off during this period.
@@ -91,6 +112,14 @@ final class CaptureEngine: NSObject, ObservableObject {
         set { configLock.lock(); defer { configLock.unlock() }; _stillnessThreshold = newValue }
     }
 
+    /// Maximum rotation rate (rad/s) allowed for a capture. If the device is rotating
+    /// faster than this, apogee/stillness events are suppressed to avoid motion blur.
+    /// ~1.5 rad/s ≈ 86°/s — a moderate pan speed.
+    var rotationRateThreshold: Double {
+        get { configLock.lock(); defer { configLock.unlock() }; return _rotationRateThreshold }
+        set { configLock.lock(); defer { configLock.unlock() }; _rotationRateThreshold = newValue }
+    }
+
     /// Whether battery saver mode is active.
     var isBatterySaverEnabled: Bool {
         get { configLock.lock(); defer { configLock.unlock() }; return _isBatterySaverEnabled }
@@ -100,7 +129,7 @@ final class CaptureEngine: NSObject, ObservableObject {
     // MARK: - Callbacks
 
     /// Called on a background queue when a frame is ready for inference.
-    var onFrameCaptured: ((CVPixelBuffer) -> Void)?
+    var onFrameCaptured: ((CVPixelBuffer, CaptureContext) -> Void)?
 
     /// Exposed for CameraPreviewView to attach a preview layer.
     var session: AVCaptureSession { captureSession }
@@ -113,20 +142,52 @@ final class CaptureEngine: NSObject, ObservableObject {
     private var lastCaptureTime: Date = .distantPast
     private var videoOutput: AVCaptureVideoDataOutput?
 
-    // -- Apogee detection state (accelerometer queue only) --
+    // -- Apogee detection state (motion update queue only) --
 
     /// Previous net acceleration sample for zero-crossing detection.
-    private var previousNetAccel: Double = 0.0
+    /// Written on the motion queue, read on captureQueue — guarded by motionLock.
+    private var _previousNetAccel: Double = 0.0
+
+    private var previousNetAccel: Double {
+        get { motionLock.lock(); defer { motionLock.unlock() }; return _previousNetAccel }
+        set { motionLock.lock(); defer { motionLock.unlock() }; _previousNetAccel = newValue }
+    }
+
+    /// Previous SIGNED vertical acceleration (userAcceleration projected onto
+    /// gravity) for the apogee zero-crossing. Only touched on the motion queue,
+    /// but guarded for consistency with the other motion state.
+    private var _previousVertical: Double = 0.0
+
+    private var previousVertical: Double {
+        get { motionLock.lock(); defer { motionLock.unlock() }; return _previousVertical }
+        set { motionLock.lock(); defer { motionLock.unlock() }; _previousVertical = newValue }
+    }
+
+    /// Current rotation rate magnitude, updated on the motion queue.
+    /// Read by duty cycle via motionLock.
+    private var _currentRotRate: Double = 0.0
+
+    private var currentRotRate: Double {
+        get { motionLock.lock(); defer { motionLock.unlock() }; return _currentRotRate }
+        set { motionLock.lock(); defer { motionLock.unlock() }; _currentRotRate = newValue }
+    }
 
     // -- Duty cycle state --
 
-    /// Thread-safe flag: accelerometer sets true at apogee, captureQueue reads & resets.
+    /// Thread-safe flag: motion updates set true at apogee/stillness, captureQueue reads & resets.
     private let motionLock = NSLock()
     private var _apogeeDetected = false
+    private var _lastMotionTrigger: CaptureTrigger = .forced
 
     private var apogeeDetected: Bool {
         get { motionLock.lock(); defer { motionLock.unlock() }; return _apogeeDetected }
         set { motionLock.lock(); defer { motionLock.unlock() }; _apogeeDetected = newValue }
+    }
+
+    /// The type of motion event that last set apogeeDetected.
+    private var lastMotionTrigger: CaptureTrigger {
+        get { motionLock.lock(); defer { motionLock.unlock() }; return _lastMotionTrigger }
+        set { motionLock.lock(); defer { motionLock.unlock() }; _lastMotionTrigger = newValue }
     }
 
     /// Whether the inference window is open (ready to capture a frame for ML).
@@ -140,6 +201,10 @@ final class CaptureEngine: NSObject, ObservableObject {
     /// Guards against sending a new frame while the previous one is still being processed.
     /// Accessed only on `captureQueue`.
     private var isProcessingFrame = false
+
+    /// What triggered the current capture window. Set in manageDutyCycle, read in captureOutput.
+    /// Accessed only on `captureQueue`.
+    private var lastTrigger: CaptureTrigger = .forced
 
     /// Counter for the current 60-second window (accessed on captureQueue).
     private var frameCountInWindow: Int = 0
@@ -157,10 +222,44 @@ final class CaptureEngine: NSObject, ObservableObject {
 
     func start() {
         guard !isRunning else { return }
-        if !isConfigured {
-            configureCaptureSession()
-            isConfigured = true
+
+        // Gate startup on camera authorization. We never silently fail: a denial is
+        // published so the UI can prompt the user to enable access in Settings.
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            beginRunning()
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                guard let self else { return }
+                DispatchQueue.main.async {
+                    if granted {
+                        self.cameraPermission = .authorized
+                        self.beginRunning()
+                    } else {
+                        self.cameraPermission = .denied
+                    }
+                }
+            }
+        case .denied, .restricted:
+            DispatchQueue.main.async { self.cameraPermission = .denied }
+        @unknown default:
+            DispatchQueue.main.async { self.cameraPermission = .denied }
         }
+    }
+
+    /// Performs the actual session/motion startup once camera access is confirmed.
+    /// Must be called on the main thread (callers dispatch as needed).
+    private func beginRunning() {
+        guard !isRunning else { return }
+        cameraPermission = .authorized
+
+        if !isConfigured {
+            // Only latch as configured if the session actually accepted the camera
+            // input/output. A failure here leaves isConfigured false so a later
+            // start() (e.g. after the user grants access) can reconfigure.
+            isConfigured = configureCaptureSession()
+        }
+
         startMotionUpdates()
         startDiagnosticsTimer()
         startDutyCycleTimer()
@@ -183,7 +282,7 @@ final class CaptureEngine: NSObject, ObservableObject {
         guard isRunning else { return }
         // Set isRunning false immediately so the pending startRunning() block will bail out.
         isRunning = false
-        motionManager.stopAccelerometerUpdates()
+        motionManager.stopDeviceMotionUpdates()
         diagnosticsTimer?.invalidate()
         diagnosticsTimer = nil
         dutyCycleTimer?.invalidate()
@@ -222,7 +321,11 @@ final class CaptureEngine: NSObject, ObservableObject {
 
     // MARK: - Private Setup
 
-    private func configureCaptureSession() {
+    /// Configures the capture session's inputs/outputs.
+    /// - Returns: `true` if the camera input was added successfully; `false` otherwise
+    ///   so the caller does not latch `isConfigured` on a dead session.
+    @discardableResult
+    private func configureCaptureSession() -> Bool {
         captureSession.beginConfiguration()
         captureSession.sessionPreset = .vga640x480
 
@@ -237,7 +340,7 @@ final class CaptureEngine: NSObject, ObservableObject {
             captureSession.canAddInput(input)
         else {
             captureSession.commitConfiguration()
-            return
+            return false
         }
         captureSession.addInput(input)
 
@@ -250,49 +353,85 @@ final class CaptureEngine: NSObject, ObservableObject {
         videoOutput = output
 
         captureSession.commitConfiguration()
+        return true
     }
 
-    /// Polls accelerometer at 100 Hz for apogee zero-crossing detection.
+    /// Polls device motion at 100 Hz for apogee zero-crossing and rotation rate detection.
     ///
-    /// Net acceleration = |a| - 1g:
-    ///   - Positive during upward acceleration (push-off phase of stride)
-    ///   - Negative during downward acceleration (swing-through / falling)
-    ///   - Zero at apogee — optimal capture moment
+    /// Apogee is detected on the SIGNED vertical acceleration — `userAcceleration`
+    /// projected onto the gravity direction:
+    ///   - Positive while accelerating upward (push-off phase of stride)
+    ///   - Negative while accelerating downward (falling toward the ground)
+    ///   - Crosses zero (positive → negative) at the stride apex — the optimal
+    ///     capture moment. A plain magnitude can never go negative, so it cannot
+    ///     express this crossing; the signed projection can.
+    ///
+    /// The unsigned magnitude of `userAcceleration` is still used for the
+    /// stillness test and the recorded `netAcceleration` telemetry field.
+    ///
+    /// Rotation rate is used as a gate: if the device is rotating too fast,
+    /// captures are suppressed to avoid motion blur.
     private func startMotionUpdates() {
-        guard motionManager.isAccelerometerAvailable else {
-            // No accelerometer (simulator) — keep inference window always open.
+        guard motionManager.isDeviceMotionAvailable else {
+            // No motion sensors (simulator) — keep inference window always open.
             captureQueue.async { [weak self] in self?.setInferenceWindow(open: true) }
             return
         }
-        motionManager.accelerometerUpdateInterval = 0.01  // 100 Hz
-        motionManager.startAccelerometerUpdates(to: .init()) { [weak self] data, _ in
-            guard let self, let data else { return }
-            let magnitude = sqrt(
-                pow(data.acceleration.x, 2) +
-                pow(data.acceleration.y, 2) +
-                pow(data.acceleration.z, 2)
-            )
-            let netAccel = magnitude - 1.0
+        motionManager.deviceMotionUpdateInterval = 0.01  // 100 Hz
+        motionManager.startDeviceMotionUpdates(to: .init()) { [weak self] motion, _ in
+            guard let self, let motion else { return }
 
-            // Apogee: zero-crossing from positive (pushing up) to negative (falling).
-            let isApogee = self.previousNetAccel >= 0 && netAccel < 0
+            // Forward every IMU sample to the recorder (no-op when not recording)
+            DataRecorder.shared.appendIMUSample(motion)
+
+            // Gravity-subtracted user acceleration.
+            let ua = motion.userAcceleration
+            // Unsigned motion intensity — used for stillness + telemetry.
+            let netAccel = sqrt(ua.x * ua.x + ua.y * ua.y + ua.z * ua.z)
+            // Signed vertical component: project user acceleration onto the
+            // (unit-length) gravity vector. Positive = accelerating upward,
+            // negative = downward; crosses zero at the stride apex.
+            let g = motion.gravity
+            let vertical = ua.x * g.x + ua.y * g.y + ua.z * g.z
+
+            // Rotation rate magnitude (rad/s)
+            let rr = motion.rotationRate
+            let rotRate = sqrt(rr.x * rr.x + rr.y * rr.y + rr.z * rr.z)
+            self.currentRotRate = rotRate
+
+            let rotationTooFast = rotRate > self.rotationRateThreshold
+
+            // Apogee: signed zero-crossing from positive (pushing up) to negative
+            // (falling). Require the positive side to exceed a noise floor so
+            // sensor jitter while stationary isn't counted as an apogee.
+            let noiseFloor = 0.03
+            let isApogee = self.previousVertical >= noiseFloor && vertical < noiseFloor
 
             // Near-stillness: phone barely moving (on a table, held very steady).
-            let isStill = abs(netAccel) < self.stillnessThreshold
+            let isStill = netAccel < self.stillnessThreshold
 
-            if isApogee || isStill {
-                self.apogeeDetected = true
+            // Only trigger if rotation rate is below threshold
+            if !rotationTooFast {
                 if isApogee {
+                    self.apogeeDetected = true
+                    self.lastMotionTrigger = .apogee
                     DispatchQueue.main.async { self.apogeeCount += 1 }
+                } else if isStill {
+                    self.apogeeDetected = true
+                    self.lastMotionTrigger = .stillness
                 }
             }
 
             // Throttle UI updates to ~10 Hz (every 10th sample at 100 Hz)
             if Int.random(in: 0..<10) == 0 {
-                DispatchQueue.main.async { self.currentNetAccel = netAccel }
+                DispatchQueue.main.async {
+                    self.currentNetAccel = netAccel
+                    self.currentRotationRate = rotRate
+                }
             }
 
             self.previousNetAccel = netAccel
+            self.previousVertical = vertical
         }
     }
 
@@ -326,10 +465,12 @@ final class CaptureEngine: NSObject, ObservableObject {
             guard timeSinceLastCapture >= cooldown else { return }
             guard !isProcessingFrame else { return }
 
-            let shouldCapture = apogeeDetected || timeSinceLastCapture >= forcedCaptureInterval
-
-            if shouldCapture {
+            if apogeeDetected {
+                lastTrigger = lastMotionTrigger
                 apogeeDetected = false
+                setInferenceWindow(open: true)
+            } else if timeSinceLastCapture >= forcedCaptureInterval {
+                lastTrigger = .forced
                 setInferenceWindow(open: true)
             }
         }
@@ -420,6 +561,9 @@ extension CaptureEngine: AVCaptureVideoDataOutputSampleBufferDelegate {
         didOutput sampleBuffer: CMSampleBuffer,
         from connection: AVCaptureConnection
     ) {
+        // Forward every frame to the recorder (no-op when not recording).
+        DataRecorder.shared.appendVideoFrame(sampleBuffer)
+
         // Only forward frames for inference when the duty cycle window is open.
         guard isInferenceWindowOpen else { return }
         guard !isProcessingFrame else { return }
@@ -433,6 +577,16 @@ extension CaptureEngine: AVCaptureVideoDataOutputSampleBufferDelegate {
         DispatchQueue.main.async { self.totalFramesCaptured += 1 }
         setInferenceWindow(open: false)
 
-        onFrameCaptured?(pixelBuffer)
+        let context = CaptureContext(
+            netAcceleration: previousNetAccel,
+            rotationRate: currentRotRate,
+            trigger: lastTrigger,
+            timestamp: Date()
+        )
+        DataRecorder.shared.logEvent(
+            "capture",
+            details: "trigger=\(lastTrigger.rawValue) accel=\(String(format: "%.3f", previousNetAccel)) rot=\(String(format: "%.3f", currentRotRate))"
+        )
+        onFrameCaptured?(pixelBuffer, context)
     }
 }

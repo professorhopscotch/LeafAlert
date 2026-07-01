@@ -28,6 +28,9 @@
 		A10000020 /* CameraPreviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000020; };
 		A10000021 /* BoundingBoxOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000021; };
 		A10000022 /* FeedbackUploader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000022; };
+		A10000023 /* DebugFrameSaver.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000023; };
+		A10000024 /* DebugCaptureReviewView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000024; };
+		A10000025 /* DataRecorder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000025; };
 		B10000001 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B20000001; };
 		B10000002 /* Vision.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B20000002; };
 		B10000003 /* CoreML.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B20000003; };
@@ -63,6 +66,9 @@
 		A20000020 /* CameraPreviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPreviewView.swift; sourceTree = "<group>"; };
 		A20000021 /* BoundingBoxOverlay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BoundingBoxOverlay.swift; sourceTree = "<group>"; };
 		A20000022 /* FeedbackUploader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FeedbackUploader.swift; sourceTree = "<group>"; };
+		A20000023 /* DebugFrameSaver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugFrameSaver.swift; sourceTree = "<group>"; };
+		A20000024 /* DebugCaptureReviewView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugCaptureReviewView.swift; sourceTree = "<group>"; };
+		A20000025 /* DataRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataRecorder.swift; sourceTree = "<group>"; };
 A20000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A30000001 /* LeafAlert.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LeafAlert.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B20000001 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
@@ -136,6 +142,7 @@ A20000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.p
 			isa = PBXGroup;
 			children = (
 				A20000003 /* CaptureEngine.swift */,
+				A20000025 /* DataRecorder.swift */,
 				A20000004 /* InferenceEngine.swift */,
 				A20000005 /* AlertEngine.swift */,
 			);
@@ -147,6 +154,7 @@ A20000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.p
 			children = (
 				A20000006 /* DetectionLogStore.swift */,
 				A20000018 /* FeedbackExporter.swift */,
+				A20000023 /* DebugFrameSaver.swift */,
 				A20000022 /* FeedbackUploader.swift */,
 			);
 			path = Stores;
@@ -163,6 +171,7 @@ A20000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.p
 				A20000012 /* SettingsView.swift */,
 				A20000017 /* DetectionFormatting.swift */,
 				A20000019 /* DebugDashboardView.swift */,
+				A20000024 /* DebugCaptureReviewView.swift */,
 				A20000020 /* CameraPreviewView.swift */,
 				A20000021 /* BoundingBoxOverlay.swift */,
 			);
@@ -305,6 +314,9 @@ A20000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.p
 				A10000015 /* PlantInfo.swift in Sources */,
 				A10000016 /* DetectionFormatting.swift in Sources */,
 				A10000018 /* FeedbackExporter.swift in Sources */,
+				A10000023 /* DebugFrameSaver.swift in Sources */,
+				A10000024 /* DebugCaptureReviewView.swift in Sources */,
+				A10000025 /* DataRecorder.swift in Sources */,
 				A10000022 /* FeedbackUploader.swift in Sources */,
 				A10000019 /* DebugDashboardView.swift in Sources */,
 				A10000020 /* CameraPreviewView.swift in Sources */,

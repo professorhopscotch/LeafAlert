@@ -1,0 +1,26 @@
+# Python dependencies for the LeafAlert ML training / distillation / feedback pipeline.
+#
+# Pins reflect the versions installed in the project .venv (`pip freeze`).
+# Only the packages actually imported by scripts/*.py are listed here.
+#
+# NOTE: The lightweight tests in tests/ (security + ingest) intentionally
+# depend on NOTHING below — they are stdlib + pytest only — so CI can run them
+# without installing this heavy stack. See .github/workflows/ci.yml.
+
+# --- Core training / export (heavy) ---
+torch==2.10.0            # scripts/train_model.py, distill_model.py
+torchvision==0.25.0      # scripts/train_model.py, distill_model.py
+timm==1.0.25             # scripts/distill_model.py
+coremltools==9.0         # scripts/coreml_export.py, distill_model.py
+numpy==2.4.3             # scripts/train_model.py, generate_synthetic_tier1.py
+pillow==12.1.1           # scripts/generate_synthetic_tier1.py (PIL)
+
+# --- Dataset download utilities ---
+requests==2.32.3         # scripts/download_*.py, expand_dataset.py
+
+# --- Optional: synthetic Tier-2 generation (Stable Diffusion) ---
+# Only needed by scripts/generate_synthetic_tier2.py. Uncomment to use.
+# diffusers==0.31.0
+
+# --- Test runner ---
+pytest==9.1.1

@@ -26,12 +26,16 @@ import sys
 from pathlib import Path
 from collections import Counter
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms, models
-import coremltools as ct
+
+# Ensure the sibling coreml_export module is importable regardless of cwd.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from coreml_export import export_coreml
 
 # ─── Config ──────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -50,6 +54,20 @@ NUM_WORKERS = 0   # Safe for macOS
 # ImageNet normalization constants
 IMAGENET_MEAN = [0.485, 0.456, 0.406]
 IMAGENET_STD = [0.229, 0.224, 0.225]
+
+
+# ─── Reproducibility ─────────────────────────────────────────────────
+
+def seed_everything(seed: int = 42):
+    """Seed all RNGs (random, numpy, torch, cuda) and enable deterministic
+    cuDNN so training runs are reproducible."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
 
 # ─── Model Architecture ───────────────────────────────────────────
 
@@ -125,10 +143,12 @@ train_transforms = transforms.Compose([
     transforms.RandomErasing(p=0.15, scale=(0.02, 0.15)),  # Simulates partial occlusion
 ])
 
-# Testing: deterministic — just resize and normalize
+# Testing: deterministic — squash to IMAGE_SIZE and normalize.
+# PARITY CONTRACT: the on-device Vision path uses .scaleFill (squash the full
+# frame to 224x224, NO crop). Eval here MUST match exactly, so we Resize to a
+# square (squash) with no CenterCrop. Train-time augmentation is left alone.
 test_transforms = transforms.Compose([
-    transforms.Resize((IMAGE_SIZE + 16, IMAGE_SIZE + 16)),
-    transforms.CenterCrop(IMAGE_SIZE),
+    transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
     transforms.ToTensor(),
     transforms.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD),
 ])
@@ -210,6 +230,19 @@ def cutmix_data(x, y, alpha=1.0):
     return mixed_x, y_a, y_b, lam
 
 
+def _accuracy_forward(model, inputs):
+    """Run an extra forward pass for accuracy tracking WITHOUT polluting
+    BatchNorm running stats: switch to eval() under no_grad, then restore
+    train() so the subsequent backward pass behaves normally."""
+    was_training = model.training
+    model.eval()
+    with torch.no_grad():
+        _, predicted = model(inputs).max(1)
+    if was_training:
+        model.train()
+    return predicted
+
+
 def train_one_epoch(model, dataloader, criterion, optimizer, device, use_mixup=True) -> tuple:
     """Train for one epoch with optional mixup, return average loss and accuracy."""
     model.train()
@@ -227,15 +260,17 @@ def train_one_epoch(model, dataloader, criterion, optimizer, device, use_mixup=T
             mixed_inputs, y_a, y_b, lam = cutmix_data(inputs, labels, CUTMIX_ALPHA)
             outputs = model(mixed_inputs)
             loss = lam * criterion(outputs, y_a) + (1 - lam) * criterion(outputs, y_b)
-            # For accuracy tracking, use original labels
-            _, predicted = model(inputs).max(1)
+            # Accuracy on original labels via a no-grad eval-mode forward so the
+            # BatchNorm running stats aren't polluted by this extra pass.
+            predicted = _accuracy_forward(model, inputs)
         elif use_mixup:
             # Mixup: blend entire images
             mixed_inputs, y_a, y_b, lam = mixup_data(inputs, labels, MIXUP_ALPHA)
             outputs = model(mixed_inputs)
             loss = lam * criterion(outputs, y_a) + (1 - lam) * criterion(outputs, y_b)
-            # For accuracy tracking, use original labels
-            _, predicted = model(inputs).max(1)
+            # Accuracy on original labels via a no-grad eval-mode forward so the
+            # BatchNorm running stats aren't polluted by this extra pass.
+            predicted = _accuracy_forward(model, inputs)
         else:
             outputs = model(inputs)
             loss = criterion(outputs, labels)
@@ -294,67 +329,31 @@ def print_per_class_accuracy(class_correct, class_total, class_names):
 
 
 def convert_to_coreml(model, class_names: list, output_path: Path):
-    """Convert PyTorch model to Core ML format with proper normalization."""
-    model.eval()
-    model.cpu()
+    """Convert PyTorch model to Core ML format with exact per-channel
+    normalization baked into the graph (via the shared export_coreml helper).
 
-    # Trace the model with example input
-    example_input = torch.randn(1, 3, IMAGE_SIZE, IMAGE_SIZE)
-    traced_model = torch.jit.trace(model, example_input)
-
-    # Per-channel scale and bias for ImageNet normalization.
-    # Vision framework delivers pixel values in [0, 255].
-    # We need: normalized = (pixel/255 - mean) / std
-    # Which is: normalized = pixel * (1/(255*std)) + (-mean/std)
-    scale = 1.0 / 255.0
-    bias = [-m / s for m, s in zip(IMAGENET_MEAN, IMAGENET_STD)]
-    per_channel_scale = [scale / s for s in IMAGENET_STD]
-
-    # Convert to Core ML with proper per-channel preprocessing
-    mlmodel = ct.convert(
-        traced_model,
-        inputs=[
-            ct.ImageType(
-                name="image",
-                shape=(1, 3, IMAGE_SIZE, IMAGE_SIZE),
-                scale=1.0 / (255.0 * 0.226),  # Approximate uniform scale
-                bias=bias,
-                color_layout="RGB",
-            )
-        ],
-        classifier_config=ct.ClassifierConfig(class_names),
-        minimum_deployment_target=ct.target.iOS17,
-    )
-
-    # Add metadata
-    mlmodel.author = "LeafAlert"
-    mlmodel.short_description = (
+    The old uniform-0.226-std approximation is gone — normalization now lives
+    inside NormalizeWrapper, so the CoreML ImageType just passes raw pixels in.
+    """
+    short_description = (
         "Detects poison ivy, poison oak, and poison sumac from camera images. "
         "EfficientNet-B0 with spatial attention (v4) trained on iNaturalist research-grade observations. "
         f"Classes: {', '.join(class_names)}"
     )
-    mlmodel.license = "For use with LeafAlert app"
-    mlmodel.version = "4.0.0"
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    # Remove old model if it exists
-    if output_path.exists():
-        import shutil
-        shutil.rmtree(output_path)
-    mlmodel.save(str(output_path))
-    print(f"\nCore ML model saved to: {output_path}")
-
-    # Calculate total size
-    total_size = sum(
-        f.stat().st_size for f in output_path.rglob("*") if f.is_file()
+    export_coreml(
+        model, class_names, output_path, IMAGE_SIZE,
+        short_description=short_description,
+        version="4.0.0",
     )
-    print(f"Model size: {total_size / 1024 / 1024:.1f} MB")
 
 
 def main():
     print("=" * 60)
     print("LeafAlert PlantDetector — Model Training v4")
     print("=" * 60)
+
+    # Deterministic seeding for reproducible runs
+    seed_everything(42)
 
     # Device selection
     if torch.backends.mps.is_available():
@@ -375,6 +374,15 @@ def main():
 
     class_names = train_dataset.classes
     num_classes = len(class_names)
+
+    # Class-index alignment: the train/test/export label order MUST match, or
+    # labels would silently swap between training, evaluation, and CoreML export.
+    if train_dataset.class_to_idx != test_dataset.class_to_idx:
+        raise ValueError(
+            "Train/test class_to_idx mismatch — labels would swap silently.\n"
+            f"  train: {train_dataset.class_to_idx}\n"
+            f"  test:  {test_dataset.class_to_idx}"
+        )
 
     print(f"Classes: {class_names}")
     print(f"Training samples: {len(train_dataset)}")
