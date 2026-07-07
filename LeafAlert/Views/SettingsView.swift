@@ -2,7 +2,7 @@ import SwiftUI
 
 /// User-configurable settings for detection sensitivity, alerts, and battery management.
 struct SettingsView: View {
-    @AppStorage("sensitivityThreshold") private var sensitivityThreshold: Double = 0.65
+    @AppStorage("sensitivityThreshold") private var sensitivityThreshold: Double = 0.50
     @AppStorage("audioAlertsEnabled") private var audioAlertsEnabled = true
     @AppStorage("screenDimLevel") private var screenDimLevel: Double = 0.7
     @AppStorage("batterySaverEnabled") private var batterySaverEnabled = false
@@ -14,14 +14,25 @@ struct SettingsView: View {
 
     @EnvironmentObject private var appState: AppState
 
+    /// A qualitative label for the sensitivity slider. A LOWER threshold means the
+    /// app alerts more readily (more sensitive), so the wording is inverted from the
+    /// raw value on purpose.
+    private var sensitivityLabel: String {
+        switch sensitivityThreshold {
+        case ..<0.45: return "High (more alerts)"
+        case 0.45..<0.60: return "Balanced"
+        default: return "Low (fewer alerts)"
+        }
+    }
+
     var body: some View {
         Form {
             Section("Detection Sensitivity") {
                 VStack(alignment: .leading) {
-                    Text("Confidence Threshold: \(Int(sensitivityThreshold * 100))%")
-                    Slider(value: $sensitivityThreshold, in: 0.3...1, step: 0.05)
+                    Text("Alert Sensitivity: \(sensitivityLabel)")
+                    Slider(value: $sensitivityThreshold, in: 0.3...0.8, step: 0.05)
                 }
-                Text("Lower values trigger more alerts but may include false positives.")
+                Text("More sensitive catches more toxic plants but raises false alarms; less sensitive is quieter but can miss plants. Near-misses are always shown as \u{201C}possible — verify visually.\u{201D} No setting is a substitute for looking.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -20,31 +20,45 @@ final class AlertEngine: ObservableObject {
 
     // MARK: - Alert Delivery
 
-    /// Evaluates a detection result and fires the appropriate haptic/audio alert.
-    /// - Parameter result: The detection result from the inference engine.
-    /// - Returns: The alert level that was triggered, or nil if suppressed.
+    /// Evaluates a detection result and fires the appropriate haptic/audio cue.
+    ///
+    /// A full `.alert` fires haptic + (optional) audio. An `.uncertain` near-miss
+    /// fires only a soft, silent haptic nudge to prompt a visual check without the
+    /// full alarm. `.ignore` is silent.
+    /// - Returns: The severity that was evaluated.
     @discardableResult
-    func process(_ result: DetectionResult) -> AlertLevel? {
-        // Only alert on toxic plant detections
-        guard InferenceEngine.toxicLabels.contains(result.plantType) else { return nil }
+    func process(_ result: DetectionResult) -> DetectionSeverity {
+        // Only consider toxic plant detections.
+        guard InferenceEngine.toxicLabels.contains(result.plantType) else { return .ignore }
+        // Sanity check: ignore impossible confidence values.
+        guard result.confidence <= 1.0 else { return .ignore }
 
-        // Below threshold — silent log only
-        guard result.confidence >= sensitivityThreshold else { return nil }
+        let severity = ToxicityThresholds.severity(
+            plantType: result.plantType,
+            confidence: result.confidence,
+            sensitivity: sensitivityThreshold
+        )
+        guard severity != .ignore else { return .ignore }
 
-        // Sanity check: ignore impossible confidence values
-        guard result.confidence <= 1.0 else { return nil }
-
-        // Cooldown check
+        // Cooldown so we don't buzz continuously on the same plant.
         let now = Date()
-        guard now.timeIntervalSince(lastAlertTime) >= cooldownInterval else { return nil }
+        guard now.timeIntervalSince(lastAlertTime) >= cooldownInterval else { return severity }
         lastAlertTime = now
 
-        let level = AlertLevel(confidence: result.confidence, threshold: sensitivityThreshold)
-        fireHaptic(for: level)
-        if audioAlertsEnabled {
-            playAudio(for: level)
+        switch severity {
+        case .alert:
+            let level = AlertLevel(confidence: result.confidence, threshold: sensitivityThreshold)
+            fireHaptic(for: level)
+            if audioAlertsEnabled {
+                playAudio(for: level)
+            }
+        case .uncertain:
+            // Soft, silent nudge for a near-miss: enough to prompt a visual check.
+            fireHaptic(for: .low)
+        case .ignore:
+            break
         }
-        return level
+        return severity
     }
 
     // MARK: - Alert Levels

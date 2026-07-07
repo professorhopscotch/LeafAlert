@@ -24,7 +24,10 @@ final class AppState: ObservableObject {
 
     // MARK: - Settings (synced from UserDefaults via AppStorage)
 
-    @AppStorage("sensitivityThreshold") var sensitivityThreshold: Double = 0.65
+    // Default 0.50 (neutral). Held-out eval showed the old 0.65 caught only ~44%
+    // of toxic plants; 0.50 with per-class thresholds + an "uncertain" band raises
+    // that materially. See ToxicityThresholds.
+    @AppStorage("sensitivityThreshold") var sensitivityThreshold: Double = 0.50
     @AppStorage("audioAlertsEnabled") var audioAlertsEnabled = true
     @AppStorage("screenDimLevel") var screenDimLevel: Double = 0.7
     @AppStorage("batterySaverEnabled") var batterySaverEnabled = false
@@ -84,12 +87,17 @@ final class AppState: ObservableObject {
 
                     self.alertEngine.process(result)
 
-                    // Only surface the warning card / bounding box for alert-worthy
-                    // detections: a toxic class at or above the sensitivity threshold.
-                    // This mirrors AlertEngine.process's own gating. Safe plants and
-                    // sub-threshold detections are still logged, just not surfaced.
-                    if InferenceEngine.toxicLabels.contains(result.plantType)
-                        && result.confidence >= Float(self.sensitivityThreshold) {
+                    // Surface the warning card for any actionable toxic detection —
+                    // both full `.alert`s and `.uncertain` near-misses (which are
+                    // shown with hedged "verify visually" framing). Only truly
+                    // sub-floor `.ignore` detections stay silent. A safety app must
+                    // never present a confident all-clear.
+                    if InferenceEngine.toxicLabels.contains(result.plantType),
+                       ToxicityThresholds.severity(
+                           plantType: result.plantType,
+                           confidence: result.confidence,
+                           sensitivity: Float(self.sensitivityThreshold)
+                       ).isActionable {
                         self.lastDetection = result
                     }
 

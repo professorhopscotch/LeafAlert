@@ -252,11 +252,16 @@ struct PatrolView: View {
         VStack(spacing: 12) {
             // Header row: plant name + dismiss button
             HStack {
+                let severity = ToxicityThresholds.severity(
+                    plantType: detection.plantType,
+                    confidence: detection.confidence,
+                    sensitivity: Float(appState.sensitivityThreshold)
+                )
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("\u{26A0} \(DetectionFormatting.plantDisplayName(detection.plantType))")
+                    Text("\u{26A0} \(DetectionFormatting.detectionHeadline(detection.plantType, severity: severity))")
                         .font(.headline)
-                        .foregroundStyle(.yellow)
-                    Text("Confidence: \(Int(detection.confidence * 100))%")
+                        .foregroundStyle(severity == .alert ? .orange : .yellow)
+                    Text(DetectionFormatting.detectionSubtitle(confidence: detection.confidence, severity: severity))
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.8))
                 }
