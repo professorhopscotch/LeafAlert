@@ -53,3 +53,6 @@ training_*_log.txt
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Staged dataset downloads (fetched via scripts/fetch_*.py — large, re-fetchable)
+data_staging/
