@@ -337,22 +337,23 @@ def _grouped_by_class(records, val_frac: float):
         by_class[r["label"]][r["group"]].append(r)
 
     for label, groups in list(by_class.items()):
-        # Enough groups that the val fraction is addressable in whole-group steps;
-        # aim for ~1/val_frac groups minimum (at least a handful).
-        min_groups = max(4, int(round(1.0 / max(val_frac, 1e-6))))
-        if len(groups) >= min_groups:
-            continue
-        # Shard EACH existing group uniformly into enough sub-groups that the class
-        # total reaches min_groups. Every image keeps a stable, filename-hashed
-        # sub-group id, so the split unit stays a coherent set of frames.
-        shards_per_group = max(2, -(-min_groups // len(groups)))  # ceil div
+        n_total = sum(len(v) for v in groups.values())
+        # No single group may exceed ~half the val target. The original pool shares
+        # ONE filename token per class (hundreds of DISTINCT plants under e.g.
+        # "poison_oak"), so an un-split giant group dumps the whole class onto one
+        # side and starves the other — the collapse we just debugged. Subshard any
+        # oversized group by a stable filename hash (a plant's real frames stay
+        # together for small, correctly-grouped pilot observations; the coarse
+        # original token is effectively image-split, which is correct — those are
+        # not one source). This makes val_frac addressable in fine steps.
+        cap = max(1, int(round(n_total * val_frac * 0.5)))
         regrouped = {}
-        for _, recs in groups.items():
-            n_shards = min(len(recs), shards_per_group)
-            if n_shards <= 1:
-                regrouped[recs[0]["group"]] = recs  # too small to shard; keep as-is
-            else:
+        for gid, recs in groups.items():
+            if len(recs) > cap:
+                n_shards = -(-len(recs) // cap)  # ceil div -> every shard <= cap
                 regrouped.update(_subshard_group(recs, n_shards))
+            else:
+                regrouped[gid] = recs
         by_class[label] = defaultdict(list, regrouped)
     return by_class
 
@@ -371,28 +372,27 @@ def source_disjoint_split(records, val_frac: float, seed: int):
     by_class = _grouped_by_class(records, val_frac)
 
     train_recs, val_recs = [], []
-    for label, groups in by_class.items():
+    for label, groups in sorted(by_class.items()):
         group_items = sorted(groups.items())  # deterministic pre-shuffle order
         rng.shuffle(group_items)
         n_total = sum(len(v) for _, v in group_items)
-        target_val = int(round(n_total * val_frac))
-        # Guarantee at least ONE group per side when a class has >=2 groups, so
-        # neither train nor val is ever missing a class it has data for.
-        val_count = 0
         n_groups = len(group_items)
+        target_val = n_total * val_frac
+
+        # Greedily fill VAL toward target_val one whole group at a time, but never
+        # take the last remaining train group — every class MUST keep training data.
+        # (The old logic over-filled val and could starve a class to 0 train, which
+        # then produced pathological inverse-frequency class weights and collapse.)
+        val_count = 0
+        n_val_groups = 0
         for gi, (_, recs) in enumerate(group_items):
             groups_left = n_groups - gi
-            need_val = val_count == 0 and groups_left == 1 and n_groups >= 2
-            need_train = (
-                gi == n_groups - 1
-                and val_count == n_total
-                and n_groups >= 2
-            )
-            if need_train:
-                train_recs.extend(recs)
-            elif val_count < target_val or need_val:
+            train_groups_so_far = gi - n_val_groups
+            must_keep_for_train = groups_left == 1 and train_groups_so_far == 0
+            if val_count < target_val and not must_keep_for_train:
                 val_recs.extend(recs)
                 val_count += len(recs)
+                n_val_groups += 1
             else:
                 train_recs.extend(recs)
     rng.shuffle(train_recs)
@@ -468,6 +468,17 @@ def freeze_backbone(model: PlantDetectorV5, freeze: bool):
 def compute_class_weights(records, num_classes: int) -> torch.Tensor:
     counts = Counter(r["label"] for r in records)
     total = sum(counts.values())
+    # A class with zero training samples yields a runaway inverse-frequency weight
+    # (e.g. 3.9 vs 0.01) that collapses the model onto the starved class. This must
+    # never happen; surface it loudly rather than train a broken model.
+    empty = [CLASS_LABELS[i] for i in range(num_classes) if counts.get(i, 0) == 0]
+    if empty:
+        raise ValueError(
+            f"No training samples for class(es) {empty}. The train/val split "
+            f"starved a class — check source_disjoint_split / --val-frac. "
+            f"Per-class train counts: "
+            f"{ {CLASS_LABELS[i]: counts.get(i, 0) for i in range(num_classes)} }"
+        )
     weights = torch.tensor(
         [total / (num_classes * max(counts.get(i, 0), 1)) for i in range(num_classes)],
         dtype=torch.float32,
@@ -687,8 +698,12 @@ def main():
             tr = toxic_recall(model, val_loader, device)
             epoch_line("warm", ep, tr_loss, tr_acc, va_loss, va_acc, tr,
                        opt.param_groups[0]["lr"])
-            # Select on toxic-recall (safety metric), tie-broken by val accuracy.
-            metric = tr + 0.01 * va_acc
+            # Select the best GENERALIZER by val accuracy. Selecting on toxic-recall
+            # alone is degenerate — a model that predicts a toxic class for every
+            # image scores 100% toxic-recall, so it would always win. On-device
+            # per-class thresholds (ToxicityThresholds) tune the safety/precision
+            # tradeoff at inference; here we just want the best-fitting model.
+            metric = va_acc
             if metric > best_metric:
                 best_metric = metric
                 best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
@@ -712,7 +727,7 @@ def main():
             epoch_line("ft", head_epochs + ep, tr_loss, tr_acc, va_loss, va_acc, tr,
                        opt.param_groups[-1]["lr"])
             sched.step()
-            metric = tr + 0.01 * va_acc
+            metric = va_acc  # select best generalizer, not the degenerate all-toxic model
             if metric > best_metric:
                 best_metric = metric
                 best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}

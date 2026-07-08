@@ -2,9 +2,14 @@
 """
 LeafAlert PlantDetector — evaluation harness.
 
-Loads BOTH the torch student (PlantDetectorNet from distill_model.py) and the
-shipped Core ML model, runs them over a dataset with the CANONICAL PARITY
-preprocessing, and reports:
+Loads BOTH the torch student and the shipped Core ML model, runs them over a
+dataset with the CANONICAL PARITY preprocessing, and reports:
+
+The torch checkpoint architecture is selected by --arch {auto,distilled,v5}
+(default auto): 'distilled' = PlantDetectorNet (distill_model.py), 'v5' =
+PlantDetectorV5 (train_v5.py). 'auto' inspects the state_dict keys (head.* -> v5,
+classifier./spatial_attn.* -> distilled). The Core ML (.mlpackage) path is
+architecture-agnostic and unaffected.
 
   * full 4x4 confusion matrix (per model)
   * per-class precision / recall / F1 / support
@@ -38,6 +43,11 @@ Usage:
       --coreml LeafAlert/Resources/MLModels/PlantDetector.mlpackage \
       --data TrainingData/Testing \
       --split heldout
+
+  # Evaluate the v5 torch checkpoint (auto-detected; --arch v5 to force):
+  python3 scripts/evaluate_model.py \
+      --checkpoint checkpoints/plant_detector_v5.pth \
+      --data TrainingData/Testing --split heldout
 
   --split is a free-text LABEL echoed into the report so callers can annotate
   whether the --data path is train-set (optimistic) or a clean held-out set.
@@ -118,15 +128,72 @@ def get_device():
     return torch.device("cpu")
 
 
-def run_torch(checkpoint: Path, samples, device, batch_size=64):
-    """Return (N, 4) softmax-probability array from the torch student.
+# ─── Architecture detection / construction ──────────────────────────────
+
+def detect_arch(state: dict) -> str:
+    """Infer the torch architecture from a state_dict's key namespace.
+
+    PlantDetectorNet (distilled) keys live under backbone./spatial_attn./
+    classifier.; PlantDetectorV5 keys live under backbone./head.. Both share a
+    `backbone.` prefix, so the unambiguous discriminator is the presence of a
+    `head.` namespace (v5) vs `classifier.`/`spatial_attn.` (distilled)."""
+    keys = list(state.keys())
+    has_head = any(k.startswith("head.") for k in keys)
+    has_classifier = any(k.startswith("classifier.") for k in keys)
+    has_attn = any(k.startswith("spatial_attn.") for k in keys)
+    if has_head and not has_classifier:
+        return "v5"
+    if has_classifier or has_attn:
+        return "distilled"
+    raise ValueError(
+        "Could not auto-detect architecture from checkpoint keys "
+        f"(sample: {keys[:6]}). Pass --arch distilled|v5 explicitly."
+    )
+
+
+def _v5_head_kind(state: dict) -> str:
+    """A bottleneck v5 head (1280->256->4) adds a second Linear at head.5; a
+    linear head (1280->4) stops at head.1. Pick the head so the constructed
+    module matches the checkpoint exactly for load_state_dict."""
+    return "bottleneck" if any(k.startswith("head.5.") for k in state) else "linear"
+
+
+def build_torch_model(checkpoint: Path, arch: str = "auto"):
+    """Load a torch checkpoint into the correct architecture.
+
+    arch is 'auto' (inspect state_dict keys), 'distilled' (PlantDetectorNet from
+    distill_model), or 'v5' (PlantDetectorV5 from train_v5). Returns
+    (eval-mode model on CPU, resolved_arch str)."""
+    state = torch.load(str(checkpoint), map_location="cpu", weights_only=True)
+    resolved = detect_arch(state) if arch == "auto" else arch
+    if resolved == "distilled":
+        model = PlantDetectorNet(len(CANONICAL_CLASSES))
+    elif resolved == "v5":
+        # Imported lazily: train_v5 -> coreml_export -> coremltools, and we want
+        # the torch-only path (--skip-coreml) usable without coremltools.
+        from train_v5 import PlantDetectorV5
+        model = PlantDetectorV5(
+            num_classes=len(CANONICAL_CLASSES),
+            head=_v5_head_kind(state),
+            pretrained=False,  # weights come from the checkpoint, not ImageNet
+        )
+    else:
+        raise ValueError(f"unknown --arch '{arch}' (expected auto|distilled|v5)")
+    model.load_state_dict(state)
+    model.eval()
+    return model, resolved
+
+
+def run_torch(checkpoint: Path, samples, device, arch="auto", batch_size=64):
+    """Return ((N, 4) softmax-probability array, resolved_arch) from the torch
+    student.
 
     The shipped checkpoint outputs raw logits; we apply softmax here so the
     probabilities are comparable to the Core ML model (which bakes softmax)."""
-    model = PlantDetectorNet(len(CANONICAL_CLASSES))
-    state = torch.load(str(checkpoint), map_location="cpu", weights_only=True)
-    model.load_state_dict(state)
-    model.eval().to(device)
+    model, resolved = build_torch_model(checkpoint, arch)
+    model.to(device)
+    print(f"  torch architecture: {resolved}"
+          + (" (auto-detected)" if arch == "auto" else ""))
 
     probs = np.zeros((len(samples), len(CANONICAL_CLASSES)), dtype=np.float32)
     with torch.no_grad():
@@ -138,7 +205,7 @@ def run_torch(checkpoint: Path, samples, device, batch_size=64):
             logits = model(batch)
             p = F.softmax(logits, dim=1).cpu().numpy()
             probs[start:start + len(chunk)] = p
-    return probs
+    return probs, resolved
 
 
 def run_coreml(coreml_path: Path, samples):
@@ -327,7 +394,24 @@ def agreement_report(pt_probs, cm_probs):
 
 # ─── K-fold honest estimate (linear probe on frozen features) ───────────
 
-def kfold_linear_probe(checkpoint, samples, device, k=5, seed=42):
+def _frozen_features(model, arch: str, batch: torch.Tensor) -> np.ndarray:
+    """Frozen penultimate feature for the linear probe, per architecture.
+
+    distilled: reproduce the forward up to the concatenated pooled vector
+      (2560-d: spatial-attention + avg/max dual-pool) that feeds the classifier.
+    v5: the 1280-d globally-pooled EfficientNet-B0 feature that feeds the head
+      (backbone was built with num_classes=0, so it already returns the pooled
+      vector). Head-choice-agnostic (linear vs bottleneck)."""
+    if arch == "v5":
+        return model.backbone(batch).cpu().numpy()
+    f = model.backbone(batch)
+    f = model.spatial_attn(f)
+    avg = model.avg_pool(f).flatten(1)
+    mx = model.max_pool(f).flatten(1)
+    return torch.cat([avg, mx], dim=1).cpu().numpy()
+
+
+def kfold_linear_probe(checkpoint, samples, device, arch="auto", k=5, seed=42):
     """Honest generalization estimate that does NOT reuse the shipped model's
     unknown train/val split and does NOT retrain the shipped weights.
 
@@ -344,15 +428,12 @@ def kfold_linear_probe(checkpoint, samples, device, k=5, seed=42):
     except ImportError:
         return "\n[kfold] scikit-learn not available — skipped.", None
 
-    model = PlantDetectorNet(len(CANONICAL_CLASSES))
-    state = torch.load(str(checkpoint), map_location="cpu", weights_only=True)
-    model.load_state_dict(state)
-    model.eval().to(device)
+    model, arch = build_torch_model(checkpoint, arch)
+    model.to(device)
 
-    # Feature hook: reproduce forward up to the concatenated pooled vector
-    # (2560-dim) that feeds the classifier head.
-    feats = np.zeros((len(samples), 2560), dtype=np.float32)
+    # Frozen penultimate features (dim depends on arch: distilled=2560, v5=1280).
     ys = np.array([lbl for _, lbl in samples])
+    feat_chunks = []
     with torch.no_grad():
         bs = 64
         for start in range(0, len(samples), bs):
@@ -360,12 +441,8 @@ def kfold_linear_probe(checkpoint, samples, device, k=5, seed=42):
             batch = torch.stack([
                 pil_to_torch_normalized(load_resized_rgb(p)) for p, _ in chunk
             ]).to(device)
-            f = model.backbone(batch)
-            f = model.spatial_attn(f)
-            avg = model.avg_pool(f).flatten(1)
-            mx = model.max_pool(f).flatten(1)
-            combined = torch.cat([avg, mx], dim=1).cpu().numpy()
-            feats[start:start + len(chunk)] = combined
+            feat_chunks.append(_frozen_features(model, arch, batch))
+    feats = np.concatenate(feat_chunks, axis=0)
 
     skf = StratifiedKFold(n_splits=k, shuffle=True, random_state=seed)
     fold_acc = []
@@ -388,7 +465,7 @@ def kfold_linear_probe(checkpoint, samples, device, k=5, seed=42):
         f"\n{'=' * 68}",
         f"HONEST ESTIMATE — {k}-fold linear probe on frozen student features",
         f"{'=' * 68}",
-        "  (logistic regression on the 2560-d pooled features; measures",
+        f"  (logistic regression on the {feats.shape[1]}-d pooled features; measures",
         "   representation quality on proper held-out folds, independent of",
         "   which images the shipped head memorized. NOT the shipped head.)",
         f"  accuracy per fold:   {['%.3f' % a for a in acc]}",
@@ -414,6 +491,11 @@ def parse_args():
     root = Path(__file__).resolve().parent.parent
     ap.add_argument("--checkpoint", type=str,
                     default=str(root / "checkpoints" / "student_distilled.pth"))
+    ap.add_argument("--arch", choices=["auto", "distilled", "v5"], default="auto",
+                    help="Torch checkpoint architecture. 'auto' inspects the "
+                         "state_dict keys (head.* -> v5, classifier./spatial_attn. "
+                         "-> distilled); 'distilled' = PlantDetectorNet, 'v5' = "
+                         "PlantDetectorV5. The Core ML path is arch-agnostic.")
     ap.add_argument("--coreml", type=str,
                     default=str(root / "LeafAlert" / "Resources" / "MLModels"
                                 / "PlantDetector.mlpackage"))
@@ -525,11 +607,12 @@ def main():
 
     # Torch pass
     print("\nRunning torch student...")
-    pt_probs = run_torch(Path(args.checkpoint), samples, device)
-    rep, _ = format_report("torch student (softmaxed logits)", y_true, pt_probs,
-                           args.split, thresholds)
+    pt_probs, torch_arch = run_torch(Path(args.checkpoint), samples, device,
+                                     arch=args.arch)
+    rep, _ = format_report(f"torch student [{torch_arch}] (softmaxed logits)",
+                           y_true, pt_probs, args.split, thresholds)
     print(rep)
-    results["models"]["torch"] = _pack(y_true, pt_probs)
+    results["models"]["torch"] = {"arch": torch_arch, **_pack(y_true, pt_probs)}
 
     # Core ML pass
     cm_probs = None
@@ -548,7 +631,7 @@ def main():
     # K-fold honest estimate
     if args.kfold > 0:
         rep, kf = kfold_linear_probe(Path(args.checkpoint), samples, device,
-                                     k=args.kfold)
+                                     arch=torch_arch, k=args.kfold)
         print(rep)
         if kf is not None:
             results["kfold_linear_probe"] = kf
