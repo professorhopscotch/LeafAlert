@@ -5,11 +5,35 @@ toxic-plant detector is a **false negative** (a poison plant called safe), so
 every metric and threshold here is weighted toward **toxic-recall**, not overall
 accuracy.
 
-## Current measured state (held-out)
+## Shipped model: v5 (data-expanded, no distillation)
+
+The current shipped `PlantDetector.mlpackage` is the **v5** model: EfficientNet-B0
+(light head, no distillation), trained by `scripts/train_v5.py` on a **5,385-image**
+pool (grew from ~1,400 via CC-licensed iNaturalist pulls incl. look-alike hard
+negatives), with motion-blur / defocus / occlusion augmentation. Evaluated on the
+frozen held-out set (`TrainingData/Testing`, n=362):
+
+| Metric | v4 baseline | **v5 (shipped)** |
+|---|---|---|
+| Confident toxic→"safe" miss (the dangerous error) | 19.1% | **10.7%** |
+| Motion-blur (k=15) toxic→safe flip | ~90% | **12.6%** |
+| Toxic surfaced (alert + "verify") at shipped thresholds | 80.5% | **90.5%** |
+| Full-alert toxic recall | 67.6% | **85.1%** |
+| Safe→toxic false alarm (surfaced) | 31% | **26%** |
+| Overall accuracy | 65% | **68.5%** |
+| Per-class recall (argmax) | ivy 51 / oak 58 / sumac 80 | ivy 58 / oak 51 / sumac 85 |
+
+v5 Pareto-improves recall **and** false alarms and nearly eliminates the motion-blur
+cliff. Remaining weak spot: poison_ivy/oak argmax recall — but their misses are
+mostly toxic→**toxic** confusion (still alerts), which is why the *confident*
+toxic→safe miss dropped. Provenance: shipped weights come from
+`checkpoints/student_v5_full.pth`; re-export with `train_v5.py` (not
+`reexport_coreml.py`, which targets the old distilled arch).
+
+## Baseline (v4) that motivated this work — held-out
 
 Evaluated on `TrainingData/Testing` (n=362), verified **0.0% duplicate** of the
 training images, so these are honest held-out numbers, not train-set optimism.
-Torch and the shipped Core ML model agree to 96.7% (argmax).
 
 | Metric | Value |
 |---|---|
@@ -22,10 +46,9 @@ Torch and the shipped Core ML model agree to 96.7% (argmax).
 | Motion-blur toxic→safe miss-rate | 4.4% → **58%** (confidently wrong) |
 | Distillation teacher vs student | 62% vs 77% (teacher is **net-negative**) |
 
-**Root cause:** a small (~1,400-image), low-diversity dataset with no look-alike
+**Root cause (v4):** a small (~1,400-image), low-diversity dataset with no look-alike
 hard negatives → memorization, brittle generalization, a mis-set threshold, and a
-distillation teacher that injects noise. Thresholds are a bounded stopgap: reaching
-≥80% recall costs ~50% false alarms. **Only better data moves the frontier.**
+distillation teacher that injects noise. v5 addressed all four.
 
 ## Threshold / operating point (stopgap, shipped)
 
@@ -59,19 +82,20 @@ or tune on it.
 
 ## Roadmap (safety-leverage first)
 
-1. **Now (shipped):** per-class thresholds + "uncertain/verify" abstention band +
-   hedged UX + committed eval harness. On held-out: toxic plants **surfaced**
-   (alert or "verify visually") rises **43.5% → 80.5%**, full alarms hit 67.6%
-   recall, at ~31% false-alarm (mostly soft "possible — verify", not full alarms).
-2. **Retrain (existing data):** drop the net-negative distillation; train directly
-   with strong **blur / occlusion / defocus** augmentation to kill the motion-blur
-   cliff; re-export via `scripts/reexport_coreml.py`; re-derive thresholds.
-3. **Data expansion (the real fix):** pull CC-licensed iNaturalist / GBIF images to
-   grow volume + seasonal/regional diversity, and add explicit **look-alike hard
-   negatives** (Virginia creeper, boxelder, Rubus/blackberry, fragrant & smooth
-   sumac) into `safe_plants`; build a frozen, source-split field test set.
-4. **Safety architecture:** an OOD / "not a plant" gate (energy score from logits;
-   requires exporting logits alongside probabilities), plus active learning from the
-   app's existing user-feedback loop.
+1. ✅ **DONE (shipped):** per-class thresholds + "uncertain/verify" abstention band
+   + hedged UX + committed eval harness.
+2. ✅ **DONE (shipped in v5):** dropped the net-negative distillation; trained
+   directly (`train_v5.py`) with blur / occlusion / defocus augmentation — the
+   motion-blur cliff fell from ~90% to **12.6%**.
+3. ✅ **DONE (shipped in v5):** data expansion — grew the pool to 5,385 images via
+   CC-licensed iNaturalist pulls with look-alike hard negatives (Virginia creeper,
+   boxelder, Rubus, fragrant/smooth sumac). `TrainingData/Testing` is the frozen
+   held-out set. *Follow-ups:* add GBIF for more source diversity; add
+   seasonal/regional stratification; the pool is CC-BY-NC-inclusive, so surface a
+   NOTICE/credits file and note the NonCommercial provenance at ship time.
+4. **Next — Safety architecture:** an OOD / "not a plant" gate (energy score from
+   logits; requires exporting logits alongside probabilities), plus active learning
+   from the app's existing user-feedback loop. Also worth targeting the residual
+   poison_ivy/oak per-class recall with class-specific data.
 
 See also the preprocessing parity contract baked into `scripts/coreml_export.py`.

@@ -51,11 +51,14 @@ enum DetectionSeverity: Equatable {
 /// as a stopgap and re-derive after each retrain.
 enum ToxicityThresholds {
 
-    /// Per-class base alert thresholds at the default sensitivity (0.50).
+    /// Per-class base alert thresholds at the default sensitivity (0.50), re-derived
+    /// for the v5 model (train_v5.py) on the frozen held-out set via
+    /// scripts/evaluate_model.py. poison_ivy/oak alert lower (weaker separation),
+    /// poison_sumac higher (well-calibrated). Re-derive after every retrain.
     static let baseAlert: [String: Float] = [
-        "poison_ivy": 0.45,
-        "poison_oak": 0.45,
-        "poison_sumac": 0.55,
+        "poison_ivy": 0.40,
+        "poison_oak": 0.40,
+        "poison_sumac": 0.52,
     ]
     private static let defaultAlert: Float = 0.50
 
