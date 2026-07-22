@@ -5,30 +5,42 @@ toxic-plant detector is a **false negative** (a poison plant called safe), so
 every metric and threshold here is weighted toward **toxic-recall**, not overall
 accuracy.
 
-## Shipped model: v5 (data-expanded, no distillation)
+## Shipped model: v6 (data-expanded, no distillation, non-plant-aware)
 
-The current shipped `PlantDetector.mlpackage` is the **v5** model: EfficientNet-B0
-(light head, no distillation), trained by `scripts/train_v5.py` on a **5,385-image**
-pool (grew from ~1,400 via CC-licensed iNaturalist pulls incl. look-alike hard
-negatives), with motion-blur / defocus / occlusion augmentation. Evaluated on the
-frozen held-out set (`TrainingData/Testing`, n=362):
+The current shipped `PlantDetector.mlpackage` is the **v6** model: EfficientNet-B0
+(light head, no distillation), trained by `scripts/train_v5.py` on a **6,119-image**
+pool — grown from ~1,400 via CC-licensed iNaturalist pulls including look-alike hard
+negatives **and 734 non-plant negatives** (birds/mammals/insects/fungi) added to the
+`safe_plants` bucket — with motion-blur / defocus / occlusion augmentation.
 
-| Metric | v4 baseline | **v5 (shipped)** |
+Evaluated on TWO frozen axes:
+
+**Held-out plants** (`TrainingData/Testing`, n=362):
+
+| Metric | v4 baseline | v5 | **v6 (shipped)** |
+|---|---|---|---|
+| Confident toxic→"safe" miss (the dangerous error) | 19.1% | 10.7% | **9.2%** |
+| Motion-blur (k=15) toxic→safe flip | ~90% | 12.6% | ~13% |
+| Toxic surfaced (alert + "verify") | 80.5% | 90.5% | **90.8%** |
+| Full-alert toxic recall | 67.6% | 85.1% | **87.8%** |
+| Safe→toxic false alarm (surfaced) | 31% | 26% | 29% |
+| Overall accuracy | 65% | 68.5% | 68.2% |
+
+**Out-of-distribution** (200 non-plants, taxa the model never trained on):
+
+| Metric | v5 | **v6 (shipped)** |
 |---|---|---|
-| Confident toxic→"safe" miss (the dangerous error) | 19.1% | **10.7%** |
-| Motion-blur (k=15) toxic→safe flip | ~90% | **12.6%** |
-| Toxic surfaced (alert + "verify") at shipped thresholds | 80.5% | **90.5%** |
-| Full-alert toxic recall | 67.6% | **85.1%** |
-| Safe→toxic false alarm (surfaced) | 31% | **26%** |
-| Overall accuracy | 65% | **68.5%** |
-| Per-class recall (argmax) | ivy 51 / oak 58 / sumac 80 | ivy 58 / oak 51 / sumac 85 |
+| Non-plant → **full toxic alert** | 28.0% | **4.5%** |
+| Non-plant → surfaced as toxic at all | 41.5% | **7.7%** |
 
-v5 Pareto-improves recall **and** false alarms and nearly eliminates the motion-blur
-cliff. Remaining weak spot: poison_ivy/oak argmax recall — but their misses are
-mostly toxic→**toxic** confusion (still alerts), which is why the *confident*
-toxic→safe miss dropped. Provenance: shipped weights come from
-`checkpoints/student_v5_full.pth`; re-export with `train_v5.py` (not
-`reexport_coreml.py`, which targets the old distilled arch).
+v6 keeps v5's plant performance (confident toxic-miss even improved) while cutting
+false toxic alerts on non-plants **6×** — because non-plants now route to the
+`safe_plants` "do-not-alert" bucket, with no app-side changes. Remaining weak spot:
+poison_ivy/oak argmax recall — their misses are mostly toxic→**toxic** confusion
+(still alerts). Provenance: shipped weights come from
+`checkpoints/student_v6_nonplant.pth`; re-export with `train_v5.py` (not
+`reexport_coreml.py`, which targets the old distilled arch). Per-class thresholds
+(ivy/oak 0.40, sumac 0.52) were re-derived on held-out and are unchanged from v5.
 
 ## Baseline (v4) that motivated this work — held-out
 
@@ -118,11 +130,13 @@ trivial baseline, and at any safe operating point it costs more real toxic-plant
 detections than it saves in false alarms — the wrong trade for a safety app. A
 post-hoc score cannot repair a model that was never shown a non-plant.
 
-**Chosen fix:** add non-plant imagery to the `safe_plants` bucket, which is already
-the app's "do not alert" class (excluded from `InferenceEngine.toxicLabels`), so the
-model *learns* to reject non-plants with **no app-side changes**. Training negatives
-are drawn from taxa disjoint from the OOD eval set, keeping that set a true held-out
-test of unseen non-plant types. Guardrail: ship only if held-out toxic-recall does
-not regress — over-feeding negatives biases toward "safe", the dangerous direction.
+**Chosen fix (✅ shipped in v6):** added 734 non-plant images to the `safe_plants`
+bucket, which is already the app's "do not alert" class (excluded from
+`InferenceEngine.toxicLabels`), so the model *learns* to reject non-plants with **no
+app-side changes**. Training negatives were drawn from taxa disjoint from the OOD
+eval set, keeping that set a true held-out test of unseen non-plant types. The
+guardrail held — held-out confident toxic-miss did not regress (improved 10.7% →
+9.2%) — and OOD full toxic alerts fell **28% → 4.5%**. Re-run the check any time with
+`scripts/ood_report.py --checkpoint <ckpt> --ood-dir data_staging/ood`.
 
 See also the preprocessing parity contract baked into `scripts/coreml_export.py`.
