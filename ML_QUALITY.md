@@ -93,9 +93,36 @@ or tune on it.
    held-out set. *Follow-ups:* add GBIF for more source diversity; add
    seasonal/regional stratification; the pool is CC-BY-NC-inclusive, so surface a
    NOTICE/credits file and note the NonCommercial provenance at ship time.
-4. **Next — Safety architecture:** an OOD / "not a plant" gate (energy score from
-   logits; requires exporting logits alongside probabilities), plus active learning
-   from the app's existing user-feedback loop. Also worth targeting the residual
-   poison_ivy/oak per-class recall with class-specific data.
+4. **Safety architecture — OOD / "not a plant".** Measured, see below. A post-hoc
+   energy gate was **evaluated and rejected**; the fix is training signal instead.
+   Still open: active learning from the app's user-feedback loop, and the residual
+   poison_ivy/oak per-class recall.
+
+## OOD ("is this even a plant?") — measured
+
+Closed-set softmax must assign every input to one of the known classes, so a bird
+or a rock still gets a plant label. Measured with `scripts/ood_report.py` against a
+200-image non-plant set (birds/mammals/insects/fungi from iNaturalist), scored by
+the shipped v5 model:
+
+| Question | Result |
+|---|---|
+| Non-plants producing a **full toxic alert** | **28.0%** |
+| Non-plants surfaced as toxic at all | 41.5% |
+| Energy-score AUROC (ID vs OOD) | 0.738 |
+| MSP AUROC (trivial baseline) | 0.721 |
+| Energy gate @95% plant retention | rejects only **17%** of non-plants, **loses 5.2% of real plants** |
+
+**Decision: do not ship the energy gate.** Its separability is barely above the
+trivial baseline, and at any safe operating point it costs more real toxic-plant
+detections than it saves in false alarms — the wrong trade for a safety app. A
+post-hoc score cannot repair a model that was never shown a non-plant.
+
+**Chosen fix:** add non-plant imagery to the `safe_plants` bucket, which is already
+the app's "do not alert" class (excluded from `InferenceEngine.toxicLabels`), so the
+model *learns* to reject non-plants with **no app-side changes**. Training negatives
+are drawn from taxa disjoint from the OOD eval set, keeping that set a true held-out
+test of unseen non-plant types. Guardrail: ship only if held-out toxic-recall does
+not regress — over-feeding negatives biases toward "safe", the dangerous direction.
 
 See also the preprocessing parity contract baked into `scripts/coreml_export.py`.
