@@ -56,3 +56,6 @@ __pycache__/
 
 # Staged dataset downloads (fetched via scripts/fetch_*.py — large, re-fetchable)
 data_staging/
+
+# Device build output (xcodebuild -derivedDataPath build_device)
+build_device/
