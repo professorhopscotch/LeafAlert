@@ -11,6 +11,9 @@ struct PatrolView: View {
     @AppStorage("livePreviewEnabled") private var livePreviewEnabled = true
     @State private var showPreviewToggleConfirm = false
     @State private var showCaptureFlash = false
+    /// Shares the preview layer with BoundingBoxOverlay so it can map Vision
+    /// coordinates through AVFoundation's gravity/orientation math.
+    @StateObject private var previewLayerBox = PreviewLayerBox()
 
     /// All possible plant labels for the correction picker.
     private static let allLabels: [(key: String, display: String)] = [
@@ -26,7 +29,8 @@ struct PatrolView: View {
             if appState.isPatrolling {
                 if livePreviewEnabled {
                     // Live camera preview
-                    CameraPreviewView(session: appState.captureEngine.session)
+                    CameraPreviewView(session: appState.captureEngine.session,
+                                      layerBox: previewLayerBox)
                         .ignoresSafeArea()
 
                     // Bounding box overlay when detection has a valid region
@@ -35,7 +39,8 @@ struct PatrolView: View {
                         BoundingBoxOverlay(
                             boundingBox: detection.boundingBox,
                             label: DetectionFormatting.plantDisplayName(detection.plantType),
-                            confidence: detection.confidence
+                            confidence: detection.confidence,
+                            layerBox: previewLayerBox
                         )
                         .ignoresSafeArea()
                     }

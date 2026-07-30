@@ -8,20 +8,50 @@ struct AROverlayView: View {
 
     @Environment(\.dismiss) private var dismiss
 
+    /// Severity of the detection being shown, used for hedged copy.
+    private var severity: DetectionSeverity {
+        ToxicityThresholds.severity(
+            plantType: detectionResult.plantType,
+            confidence: detectionResult.confidence,
+            sensitivity: Float(sensitivityThreshold)
+        )
+    }
+
+    @AppStorage("sensitivityThreshold") private var sensitivityThreshold: Double = 0.50
+
     var body: some View {
         ZStack {
-            // AR session container
-            ARViewContainer(boundingBox: detectionResult.boundingBox)
+            // Live AR camera feed.
+            ARViewContainer()
                 .ignoresSafeArea()
+
+            // Approximate region indicator. Drawn in 2D over the feed rather than as
+            // a world-anchored 3D entity: the box comes from saliency on a frame
+            // captured a moment ago, so it marks "roughly where this was seen in
+            // that shot", not a point in world space. Pretending otherwise would put
+            // a confident red marker on the wrong patch of ground.
+            if detectionResult.boundingBox != .zero {
+                BoundingBoxOverlay(
+                    boundingBox: detectionResult.boundingBox,
+                    label: DetectionFormatting.plantDisplayName(detectionResult.plantType),
+                    confidence: detectionResult.confidence
+                )
+                .ignoresSafeArea()
+            }
 
             VStack {
                 // Detection info overlay
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(detectionResult.plantType.replacingOccurrences(of: "_", with: " ").capitalized)
+                        Text(DetectionFormatting.detectionHeadline(detectionResult.plantType, severity: severity))
                             .font(.headline)
-                        Text("Confidence: \(Int(detectionResult.confidence * 100))%")
+                        Text(DetectionFormatting.detectionSubtitle(confidence: detectionResult.confidence, severity: severity))
                             .font(.caption)
+                        Text(detectionResult.boundingBox == .zero
+                             ? "Location not pinpointed — scan the area carefully."
+                             : "Box shows the approximate region from the last scan.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
                     }
                     .padding()
                     .background(.ultraThinMaterial)
@@ -59,35 +89,16 @@ struct AROverlayView: View {
     }
 }
 
-/// UIViewRepresentable wrapper for RealityKit's ARView.
+/// UIViewRepresentable wrapper for RealityKit's ARView — a plain live camera feed.
+///
+/// This deliberately places NO 3D entity in the scene. It previously anchored a
+/// warning plane to `AnchorEntity(.camera)`, which is camera-relative: the marker
+/// followed the user's gaze instead of staying on the plant, so it appeared to
+/// point at whatever they happened to be looking at — including after turning away
+/// from the plant entirely. Localising for real needs a detection/segmentation
+/// model plus a raycast to a world surface; until then the honest presentation is a
+/// 2D "approximate region" box drawn by the parent view.
 struct ARViewContainer: UIViewRepresentable {
-    let boundingBox: CGRect
-
-    /// Tag name used to identify the overlay anchor so it can be removed on subsequent updates.
-    private static let anchorName = "leafalert-overlay"
-    /// Distance (in metres) at which the overlay plane is placed in front of the camera.
-    private static let overlayDistance: Float = 1.5
-    /// Duration of one half-cycle of the pulse animation (seconds).
-    private static let pulseDuration: TimeInterval = 0.8
-    /// Scale multiplier at the peak of the pulse animation.
-    private static let pulseScaleFactor: Float = 1.15
-
-    final class Coordinator {
-        var pulseTimer: Timer?
-
-        func invalidatePulseTimer() {
-            pulseTimer?.invalidate()
-            pulseTimer = nil
-        }
-
-        deinit {
-            invalidatePulseTimer()
-        }
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
 
     func makeUIView(context: Context) -> ARView {
         let arView = ARView(frame: UIScreen.main.bounds)
@@ -101,92 +112,12 @@ struct ARViewContainer: UIViewRepresentable {
         return arView
     }
 
-    static func dismantleUIView(_ uiView: ARView, coordinator: Coordinator) {
-        coordinator.invalidatePulseTimer()
+    static func dismantleUIView(_ uiView: ARView, coordinator: ()) {
         uiView.session.pause()
     }
 
     func updateUIView(_ uiView: ARView, context: Context) {
-        // Invalidate any existing pulse timer before removing anchors.
-        context.coordinator.invalidatePulseTimer()
-
-        // Remove any previously placed overlay anchor to avoid duplicates.
-        for anchor in uiView.scene.anchors where anchor.name == Self.anchorName {
-            uiView.scene.removeAnchor(anchor)
-        }
-
-        let isGeneralWarning = boundingBox == .zero
-        let distance = Self.overlayDistance
-
-        // Vision saliency returns coordinates in pixel buffer space (origin bottom-left).
-        // The pixel buffer is landscape (rotated 90° relative to portrait screen).
-        // Swap X/Y and flip the new X to map from landscape buffer space to portrait screen space.
-        let rawX: Float = isGeneralWarning ? 0.5 : Float(boundingBox.midX)
-        let rawY: Float = isGeneralWarning ? 0.5 : Float(boundingBox.midY)
-        let rawW: Float = isGeneralWarning ? 0.3 : Float(boundingBox.width)
-        let rawH: Float = isGeneralWarning ? 0.3 : Float(boundingBox.height)
-
-        // Map from landscape buffer → portrait screen: screenX = rawY, screenY = rawX
-        let centreX: Float = isGeneralWarning ? 0.5 : rawY
-        let centreY: Float = isGeneralWarning ? 0.5 : rawX
-        let boxWidth: Float = isGeneralWarning ? 0.3 : rawH
-        let boxHeight: Float = isGeneralWarning ? 0.3 : rawW
-
-        // Approximate horizontal and vertical field-of-view angles (radians) for a typical phone camera.
-        let hFOV: Float = Float.pi / 3   // ~60 degrees
-        let vFOV: Float = Float.pi / 4   // ~45 degrees
-
-        // Angular offset from centre: positive X = right, positive Y = up.
-        let xOffset = distance * tan((centreX - 0.5) * hFOV)
-        // Invert Y because normalised image Y increases downward but world Y increases upward.
-        let yOffset = distance * tan((0.5 - centreY) * vFOV)
-
-        // Scale the overlay plane to roughly match the bounding-box proportions at that distance.
-        let planeWidth = max(distance * tan(boxWidth * hFOV / 2) * 2, 0.15)
-        let planeHeight = max(distance * tan(boxHeight * vFOV / 2) * 2, 0.15)
-
-        // Build a semi-transparent warning plane.
-        let mesh = MeshResource.generatePlane(width: planeWidth, height: planeHeight)
-        let color: UIColor = isGeneralWarning
-            ? UIColor.orange.withAlphaComponent(0.4)
-            : UIColor.red.withAlphaComponent(0.4)
-        var material = UnlitMaterial(color: color)
-        material.blending = .transparent(opacity: .init(floatLiteral: 1.0))
-        let entity = ModelEntity(mesh: mesh, materials: [material])
-        entity.name = "overlay-plane"
-        entity.position = SIMD3<Float>(xOffset, yOffset, -distance)
-
-        // Create a camera-relative anchor so the overlay stays in front of the user.
-        let anchor = AnchorEntity(.camera)
-        anchor.name = Self.anchorName
-        anchor.addChild(entity)
-        uiView.scene.addAnchor(anchor)
-
-        startPulseAnimation(on: entity, coordinator: context.coordinator)
-    }
-
-    /// Adds a repeating pulse animation managed by the Coordinator's timer.
-    private func startPulseAnimation(on entity: ModelEntity, coordinator: Coordinator) {
-        let originalTransform = entity.transform
-        var scaledUpTransform = originalTransform
-        scaledUpTransform.scale = originalTransform.scale * Self.pulseScaleFactor
-        let halfCycle = Self.pulseDuration
-        let threshold = originalTransform.scale.x * (1.0 + Self.pulseScaleFactor) / 2.0
-
-        entity.move(to: scaledUpTransform, relativeTo: entity.parent,
-                    duration: halfCycle, timingFunction: .easeInOut)
-
-        // Store timer in coordinator so it can be invalidated on next update or dismantle.
-        coordinator.pulseTimer = Timer.scheduledTimer(withTimeInterval: halfCycle, repeats: true) { timer in
-            guard entity.scene != nil else {
-                timer.invalidate()
-                return
-            }
-            let target = entity.transform.scale.x > threshold
-                ? originalTransform : scaledUpTransform
-            entity.move(to: target, relativeTo: entity.parent,
-                        duration: halfCycle, timingFunction: .easeInOut)
-        }
+        // Nothing to update: the region indicator is drawn in 2D by the parent.
     }
 }
 

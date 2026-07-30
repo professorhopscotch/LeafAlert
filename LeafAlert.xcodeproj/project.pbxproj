@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		B2000001 /* ToxicityThresholdsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001 /* ToxicityThresholdsTests.swift */; };
+		B2000002 /* DetectionPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000002 /* DetectionPresentationTests.swift */; };
+		B2000003 /* AlertEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000003 /* AlertEngineTests.swift */; };
 		A10000001 /* LeafAlertApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000001; };
 		A10000002 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000002; };
 		A10000003 /* CaptureEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000003; };
@@ -44,7 +47,21 @@
 		C10000001 /* PlantDetector.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = C20000001; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		B8000002 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA0000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A60000001;
+			remoteInfo = LeafAlert;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
+		B1000001 /* ToxicityThresholdsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToxicityThresholdsTests.swift; sourceTree = "<group>"; };
+		B1000002 /* DetectionPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetectionPresentationTests.swift; sourceTree = "<group>"; };
+		B1000003 /* AlertEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlertEngineTests.swift; sourceTree = "<group>"; };
+		B3000001 /* LeafAlertTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LeafAlertTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A20000001 /* LeafAlertApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeafAlertApp.swift; sourceTree = "<group>"; };
 		A20000002 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		A20000003 /* CaptureEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureEngine.swift; sourceTree = "<group>"; };
@@ -85,6 +102,13 @@ A20000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.p
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		B6000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A40000001 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -104,11 +128,22 @@ A20000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.p
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		B4000001 /* LeafAlertTests */ = {
+			isa = PBXGroup;
+			children = (
+				B1000001 /* ToxicityThresholdsTests.swift */,
+				B1000002 /* DetectionPresentationTests.swift */,
+				B1000003 /* AlertEngineTests.swift */,
+			);
+			path = LeafAlertTests;
+			sourceTree = "<group>";
+		};
 		A50000001 = {
 			isa = PBXGroup;
 			children = (
 				A50000002 /* LeafAlert */,
 				B50000001 /* Frameworks */,
+				B4000001 /* LeafAlertTests */,
 				A50000009 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -200,6 +235,7 @@ A20000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.p
 			isa = PBXGroup;
 			children = (
 				A30000001 /* LeafAlert.app */,
+				B3000001 /* LeafAlertTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -231,6 +267,23 @@ A20000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.p
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		B5000001 /* LeafAlertTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B7000001 /* Build configuration list for PBXNativeTarget "LeafAlertTests" */;
+			buildPhases = (
+				B6000001 /* Sources */,
+				B6000002 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B8000001 /* PBXTargetDependency */,
+			);
+			name = LeafAlertTests;
+			productName = LeafAlertTests;
+			productReference = B3000001 /* LeafAlertTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 		A60000001 /* LeafAlert */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = A80000003 /* Build configuration list for PBXNativeTarget "LeafAlert" */;
@@ -261,6 +314,10 @@ A20000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.p
 					A60000001 = {
 						CreatedOnToolsVersion = 15.0;
 					};
+					B5000001 = {
+						CreatedOnToolsVersion = 15.0;
+						TestTargetID = A60000001;
+					};
 				};
 			};
 			buildConfigurationList = A80000001 /* Build configuration list for PBXProject "LeafAlert" */;
@@ -277,6 +334,7 @@ A20000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.p
 			projectRoot = "";
 			targets = (
 				A60000001 /* LeafAlert */,
+				B5000001 /* LeafAlertTests */,
 			);
 		};
 /* End PBXProject section */
@@ -293,6 +351,16 @@ A20000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.p
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		B6000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B2000001 /* ToxicityThresholdsTests.swift in Sources */,
+				B2000002 /* DetectionPresentationTests.swift in Sources */,
+				B2000003 /* AlertEngineTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A70000001 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -327,7 +395,53 @@ A20000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.p
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		B8000001 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A60000001 /* LeafAlert */;
+			targetProxy = B8000002 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
+		B7000002 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = KYU8WP2RG7;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.leafalert.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LeafAlert.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/LeafAlert";
+			};
+			name = Debug;
+		};
+		B7000003 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = KYU8WP2RG7;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.leafalert.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/LeafAlert.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/LeafAlert";
+			};
+			name = Release;
+		};
 		AB0000001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -437,6 +551,15 @@ A20000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.p
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		B7000001 /* Build configuration list for PBXNativeTarget "LeafAlertTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B7000002 /* Debug */,
+				B7000003 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		A80000001 /* Build configuration list for PBXProject "LeafAlert" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

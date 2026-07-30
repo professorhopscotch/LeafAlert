@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   ios-build:
-    name: iOS build (simulator)
+    name: iOS build + unit tests (simulator)
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,13 +25,17 @@ jobs:
           xcodebuild -version
           xcrun simctl list devices available | grep -i iphone || true
 
-      - name: Build (no code signing)
+      # `test` builds the app and runs the LeafAlertTests bundle, which covers the
+      # safety-critical alert gating (ToxicityThresholds), the hedged detection copy,
+      # and the bounding-box coordinate mapping. A regression in any of those either
+      # withholds a warning about a toxic plant or points the user at the wrong spot,
+      # so this gate blocks the merge rather than just warning.
+      - name: Build and test (no code signing)
         run: |
-          xcodebuild \
+          xcodebuild test \
             -scheme LeafAlert \
             -sdk iphonesimulator \
             -destination 'platform=iOS Simulator,name=iPhone 17' \
-            build \
             CODE_SIGNING_ALLOWED=NO
 
   python-tests:
