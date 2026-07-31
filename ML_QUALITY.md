@@ -110,6 +110,32 @@ or tune on it.
    Still open: active learning from the app's user-feedback loop, and the residual
    poison_ivy/oak per-class recall.
 
+## Rejected experiment: v7 (seasonal rebalance) — DO NOT retry blindly
+
+Hypothesis: poison_ivy/oak recall was weak because their training data was
+72–84% spring+summer, while fall (red foliage) and winter (leafless hairy vines)
+look nothing like that. Fetched 2,146 fall/winter images (1,455 survived QA),
+bringing ivy to a near-uniform 25/21/26/27 seasonal split.
+
+**Result: REJECTED — failed the acceptance floor.**
+
+| Metric | v6 (shipped) | v7 |
+|---|---|---|
+| Confident toxic→safe | **9.2%** | 11.8% ❌ |
+| poison_ivy→safe | **17%** | 23% ❌ |
+| poison_oak→safe | **8%** | 12% ❌ |
+| overall accuracy | 68.2% | 69.3% ✅ |
+
+Overall accuracy went UP while the safety metric got WORSE — exactly what the
+floor exists to catch, and a reminder never to gate on aggregate accuracy. Best
+explanation: leafless winter vines are genuinely ambiguous against "safe", so
+adding them blurred the ivy/safe boundary rather than sharpening it.
+
+The seasonal images remain in the train pool (they are legitimate data), but the
+shipped weights are v6. If you retry this, hold out a season-stratified test set
+first so seasonal performance can be measured directly instead of inferred, and
+consider weighting rather than simply adding ambiguous winter frames.
+
 ## OOD ("is this even a plant?") — measured
 
 Closed-set softmax must assign every input to one of the known classes, so a bird
