@@ -85,6 +85,27 @@ final class DetectionPresentationTests: XCTestCase {
         XCTAssertLessThanOrEqual(view.maxY, size.height)
     }
 
+    func testFullyOffScreenRectCollapsesToZeroNotInfinity() {
+        // CGRect.intersection returns .null (infinite origin) when there is no
+        // overlap. Handing that to SwiftUI's .position pushes non-finite geometry
+        // into CoreAnimation, so it must collapse to .zero instead.
+        let size = CGSize(width: 100, height: 200)
+        let offscreen = CGRect(x: 5.0, y: 5.0, width: 0.1, height: 0.1)
+        let view = BoundingBoxOverlay.visionToView(offscreen, in: size, previewLayer: nil)
+        XCTAssertFalse(view.isNull)
+        XCTAssertFalse(view.isInfinite)
+        XCTAssertTrue(view.origin.x.isFinite && view.origin.y.isFinite)
+        XCTAssertTrue(view.width.isFinite && view.height.isFinite)
+    }
+
+    func testDetectionBoxLifetimeIsShortEnoughToNotOutliveTheScene() {
+        // The box is a spatial claim about one captured frame; if it outlives the
+        // scene the user can be steered toward the wrong place. Captures run at
+        // roughly 1 Hz, so the window must stay small.
+        XCTAssertGreaterThan(AppState.detectionBoxLifetime, 0)
+        XCTAssertLessThanOrEqual(AppState.detectionBoxLifetime, 5.0)
+    }
+
     func testMappedRectScalesWithViewSize() {
         let box = CGRect(x: 0.25, y: 0.25, width: 0.5, height: 0.5)
         let small = BoundingBoxOverlay.visionToView(box, in: CGSize(width: 100, height: 100), previewLayer: nil)

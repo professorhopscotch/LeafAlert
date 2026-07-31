@@ -86,10 +86,14 @@ struct BoundingBoxOverlay: View {
             )
         }
 
-        // Clamp to view bounds with some padding.
-        return raw
+        // Clamp to view bounds with some padding. `intersection` returns
+        // `CGRect.null` (origin = infinity) when the box lies entirely off-screen;
+        // passing that to SwiftUI's `.position` feeds non-finite geometry into
+        // CoreAnimation, so collapse it to `.zero` and let the caller skip drawing.
+        let clamped = raw
             .insetBy(dx: -4, dy: -4)
             .intersection(CGRect(origin: .zero, size: size))
+        return clamped.isNull || clamped.isInfinite ? .zero : clamped
     }
 
     private func visionToView(_ visionRect: CGRect, in size: CGSize) -> CGRect {

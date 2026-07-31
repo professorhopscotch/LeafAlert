@@ -25,19 +25,15 @@ struct AROverlayView: View {
             ARViewContainer()
                 .ignoresSafeArea()
 
-            // Approximate region indicator. Drawn in 2D over the feed rather than as
-            // a world-anchored 3D entity: the box comes from saliency on a frame
-            // captured a moment ago, so it marks "roughly where this was seen in
-            // that shot", not a point in world space. Pretending otherwise would put
-            // a confident red marker on the wrong patch of ground.
-            if detectionResult.boundingBox != .zero {
-                BoundingBoxOverlay(
-                    boundingBox: detectionResult.boundingBox,
-                    label: DetectionFormatting.plantDisplayName(detectionResult.plantType),
-                    confidence: detectionResult.confidence
-                )
-                .ignoresSafeArea()
-            }
+            // NO box is drawn here, deliberately. The saliency rect is expressed in
+            // the capture session's frame, but this screen renders a DIFFERENT
+            // camera (ARKit's, with its own field of view), and the rect came from a
+            // frame captured moments ago rather than the live feed. There is no
+            // correct mapping between the two, so any rectangle drawn here would be
+            // a confident label over an arbitrary patch of ground — the exact
+            // failure this screen is supposed to help the user avoid.
+            // The live-preview box in PatrolView is the honest locator; this screen
+            // gives a plain-language warning instead.
 
             VStack {
                 // Detection info overlay
@@ -47,9 +43,7 @@ struct AROverlayView: View {
                             .font(.headline)
                         Text(DetectionFormatting.detectionSubtitle(confidence: detectionResult.confidence, severity: severity))
                             .font(.caption)
-                        Text(detectionResult.boundingBox == .zero
-                             ? "Location not pinpointed — scan the area carefully."
-                             : "Box shows the approximate region from the last scan.")
+                        Text("Seen moments ago near here — this view can't pinpoint it. Scan the area carefully.")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }

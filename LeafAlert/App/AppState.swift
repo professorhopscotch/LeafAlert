@@ -99,6 +99,7 @@ final class AppState: ObservableObject {
                            sensitivity: Float(self.sensitivityThreshold)
                        ).isActionable {
                         self.lastDetection = result
+                        self.scheduleDetectionExpiry(for: result)
                     }
 
                     // Log every detection regardless of gating so the map/history
@@ -115,6 +116,9 @@ final class AppState: ObservableObject {
     /// Stops the patrol pipeline.
     func stopPatrol() {
         captureEngine.stop()
+        detectionExpiryTask?.cancel()
+        detectionExpiryTask = nil
+        lastDetection = nil
         // Do NOT nil out captureEngine.onFrameCaptured here: it is read on the
         // capture queue while this runs on the main actor, and clearing it mid-
         // flight can strand CaptureEngine.isProcessingFrame (set before the
@@ -123,6 +127,32 @@ final class AppState: ObservableObject {
         // completion already neutralizes any late frame, and
         // markFrameProcessingComplete() still runs first to free the pipeline.
         isPatrolling = false
+    }
+
+    /// How long a detection's on-screen box stays valid.
+    ///
+    /// The bounding box describes where something was seen in ONE captured frame.
+    /// The camera keeps moving, so after a moment that rectangle is a confident
+    /// spatial claim about a scene that no longer exists — a hiker could see a box
+    /// on the left and steer right while the plant is actually behind them. Captures
+    /// run at roughly 1 Hz, so a couple of seconds keeps the box present between
+    /// consecutive detections while still expiring a stale one.
+    static let detectionBoxLifetime: TimeInterval = 2.5
+
+    private var detectionExpiryTask: Task<Void, Never>?
+
+    /// Clears `lastDetection` once its box can no longer be trusted, unless a newer
+    /// detection has already replaced it.
+    private func scheduleDetectionExpiry(for result: DetectionResult) {
+        detectionExpiryTask?.cancel()
+        detectionExpiryTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.detectionBoxLifetime * 1_000_000_000))
+            guard !Task.isCancelled, let self else { return }
+            // Only clear if this is still the detection on screen.
+            if self.lastDetection?.id == result.id {
+                self.lastDetection = nil
+            }
+        }
     }
 
     /// Marks the first-launch disclaimer as shown.
