@@ -67,9 +67,20 @@ final class AppState: ObservableObject {
                 // Save every captured frame to disk when debug mode is on.
                 if saveFrames {
                     let jpegForDebug = self.imageConverter.jpegData(from: pixelBuffer)
+                    // Record the model's full verdict, not just a label: the active
+                    // learning selector ranks this pool by confidence, and the
+                    // near-miss frames (toxic class present but below its alert
+                    // threshold) are the ones that reveal misses.
+                    let sensitivity = Float(self.sensitivityThreshold)
+                    let severity = result.map {
+                        ToxicityThresholds.severity(plantType: $0.plantType,
+                                                    confidence: $0.confidence,
+                                                    sensitivity: sensitivity)
+                    }
                     DebugFrameSaver.shared.save(
                         jpegData: jpegForDebug,
-                        classification: result?.plantType,
+                        detection: result,
+                        severity: severity,
                         context: captureContext
                     )
                 }

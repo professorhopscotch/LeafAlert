@@ -18,6 +18,10 @@ struct DebugDashboardView: View {
             }
             .navigationTitle("Debug")
             .navigationBarTitleDisplayMode(.inline)
+            // Refresh the cached count here rather than from `body`: reading it is
+            // now an O(1) in-memory load, and the directory stat happens once on
+            // appear instead of at the ~10 Hz rate `body` re-evaluates.
+            .onAppear { DebugFrameSaver.shared.refreshFrameCount() }
         }
     }
 
@@ -144,14 +148,30 @@ struct DebugDashboardView: View {
 
                 ForEach(sorted, id: \.key) { label, confidence in
                     let isToxic = InferenceEngine.toxicLabels.contains(label)
-                    let wouldAlert = isToxic && confidence >= threshold &&
-                        confidence > (confidences["safe_plants"] ?? 0)
+                    // Ask the SAME code the app ships with. This panel previously
+                    // reimplemented a single global-threshold rule, which stopped
+                    // matching reality when per-class thresholds and the uncertainty
+                    // band landed — so the one screen you open to ask "why didn't it
+                    // warn me?" reported the wrong verdict in both directions.
+                    let severity: DetectionSeverity = isToxic
+                        ? ToxicityThresholds.severity(plantType: label,
+                                                      confidence: confidence,
+                                                      sensitivity: threshold)
+                        : .ignore
+                    let beatsSafe = confidence > (confidences["safe_plants"] ?? 0)
+                    let wouldAlert = severity == .alert && beatsSafe
+                    let wouldSurface = severity.isActionable && beatsSafe
 
                     HStack(spacing: 8) {
-                        // Alert indicator
+                        // Alert indicator: filled for a full alert, hollow for the
+                        // "verify visually" band, so both are visible here.
                         if wouldAlert {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundStyle(.red)
+                                .font(.caption)
+                        } else if wouldSurface {
+                            Image(systemName: "exclamationmark.triangle")
+                                .foregroundStyle(.yellow)
                                 .font(.caption)
                         }
 
@@ -161,24 +181,33 @@ struct DebugDashboardView: View {
 
                         Spacer()
 
-                        // Confidence bar
+                        // Per-class bar for toxic classes, so the readout matches the
+                        // per-class gate rather than one global number.
+                        if isToxic {
+                            Text(String(format: "thr %.2f",
+                                        ToxicityThresholds.alertThreshold(for: label, sensitivity: threshold)))
+                                .font(.caption2)
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+
                         confidenceBar(confidence, isToxic: isToxic, wouldAlert: wouldAlert)
 
                         Text("\(Int(confidence * 100))%")
                             .monospacedDigit()
                             .font(.subheadline)
-                            .foregroundStyle(wouldAlert ? .red : .secondary)
+                            .foregroundStyle(wouldAlert ? .red : (wouldSurface ? .yellow : .secondary))
                             .frame(width: 40, alignment: .trailing)
                     }
                 }
 
-                // Threshold line indicator
+                // Legend: thresholds are per class, so there is no single line.
                 HStack {
                     Image(systemName: "line.horizontal.3.decrease")
                         .foregroundStyle(.orange)
-                    Text("Alert threshold")
+                    Text("Per-class thresholds; hollow = \"verify visually\" band")
                     Spacer()
-                    Text("\(Int(threshold * 100))%")
+                    Text("sens \(String(format: "%.2f", threshold))")
                         .monospacedDigit()
                         .foregroundStyle(.orange)
                 }
