@@ -5,42 +5,44 @@ toxic-plant detector is a **false negative** (a poison plant called safe), so
 every metric and threshold here is weighted toward **toxic-recall**, not overall
 accuracy.
 
-## Shipped model: v6 (data-expanded, no distillation, non-plant-aware)
+## Shipped model: v8 (data-expanded, no distillation, non-plant-aware, source-diversified)
 
-The current shipped `PlantDetector.mlpackage` is the **v6** model: EfficientNet-B0
-(light head, no distillation), trained by `scripts/train_v5.py` on a **6,119-image**
-pool — grown from ~1,400 via CC-licensed iNaturalist pulls including look-alike hard
-negatives **and 734 non-plant negatives** (birds/mammals/insects/fungi) added to the
-`safe_plants` bucket — with motion-blur / defocus / occlusion augmentation.
+The current shipped `PlantDetector.mlpackage` is the **v8** model: EfficientNet-B0
+(light head, no distillation), trained by `scripts/train_v5.py` on a **9,391-image**
+pool — grown from ~1,400 via CC-licensed iNaturalist pulls (look-alike hard
+negatives, 734 non-plant negatives in `safe_plants`, fall/winter ivy+oak) **plus
+1,817 GBIF images (all CC-BY-4.0 / CC0)** for source diversity — with
+motion-blur / defocus / occlusion augmentation.
 
 Evaluated on TWO frozen axes:
 
 **Held-out plants** (`TrainingData/Testing`, n=362):
 
-| Metric | v4 baseline | v5 | **v6 (shipped)** |
+| Metric | v4 baseline | v6 | **v8 (shipped)** |
 |---|---|---|---|
-| Confident toxic→"safe" miss (the dangerous error) | 19.1% | 10.7% | **9.2%** |
-| Motion-blur (k=15) toxic→safe flip | ~90% | 12.6% | ~13% |
-| Toxic surfaced (alert + "verify") | 80.5% | 90.5% | **90.8%** |
-| Full-alert toxic recall | 67.6% | 85.1% | **87.8%** |
-| Safe→toxic false alarm (surfaced) | 31% | 26% | 29% |
-| Overall accuracy | 65% | 68.5% | 68.2% |
+| Confident toxic→"safe" miss (the dangerous error) | 19.1% | 9.2% | **8.0%** |
+| Motion-blur (k=15) toxic→safe flip | ~90% | 12.6% | **11.8%** |
+| Toxic surfaced (alert + "verify") at shipped thresholds | 80.5% | 90.8% | **92.0%** |
+| Full-alert toxic recall | 67.6% | 87.8% | **89.7%** |
+| Safe→toxic false alarm (surfaced) | 31% | 29% | **24%** |
+| Overall accuracy | 65% | 68.2% | **74.0%** |
+| Per-class recall (argmax) | ivy 51 / oak 58 / sumac 80 | ivy 52 / oak 62 / sumac 85 | **ivy 62 / oak 69 / sumac 86** |
 
 **Out-of-distribution** (200 non-plants, taxa the model never trained on):
 
-| Metric | v5 | **v6 (shipped)** |
+| Metric | v6 | **v8 (shipped)** |
 |---|---|---|
-| Non-plant → **full toxic alert** | 28.0% | **4.5%** |
-| Non-plant → surfaced as toxic at all | 41.5% | **7.7%** |
+| Non-plant → **full toxic alert** | 4.5% | 7.0% |
+| Non-plant → surfaced as toxic at all | 7.7% | 9.0% |
 
-v6 keeps v5's plant performance (confident toxic-miss even improved) while cutting
-false toxic alerts on non-plants **6×** — because non-plants now route to the
-`safe_plants` "do-not-alert" bucket, with no app-side changes. Remaining weak spot:
-poison_ivy/oak argmax recall — their misses are mostly toxic→**toxic** confusion
-(still alerts). Provenance: shipped weights come from
-`checkpoints/student_v6_nonplant.pth`; re-export with `train_v5.py` (not
-`reexport_coreml.py`, which targets the old distilled arch). Per-class thresholds
-(ivy/oak 0.40, sumac 0.52) were re-derived on held-out and are unchanged from v5.
+v8 improves every plant-axis metric. Source diversity from GBIF (different cameras,
+framing, regions) was the axis that helped, where seasonal ambiguity (v7) did not.
+The OOD axis gave back ~2.5pp (5 images on n=200, ~1.6 SE — within noise, and a
+nuisance error rather than a safety one); accepted because the dangerous
+confident-miss improved. Per-class thresholds (ivy/oak 0.40, sumac 0.52) were
+re-derived on held-out and are unchanged. Provenance:
+`checkpoints/student_v8_gbif.pth`; re-export with `train_v5.py`'s `export()` (not
+`reexport_coreml.py`, which targets the old distilled arch).
 
 ## Baseline (v4) that motivated this work — held-out
 
@@ -102,8 +104,8 @@ or tune on it.
 3. ✅ **DONE (shipped in v5):** data expansion — grew the pool to 5,385 images via
    CC-licensed iNaturalist pulls with look-alike hard negatives (Virginia creeper,
    boxelder, Rubus, fragrant/smooth sumac). `TrainingData/Testing` is the frozen
-   held-out set. *Follow-ups:* add GBIF for more source diversity; add
-   seasonal/regional stratification; the pool is CC-BY-NC-inclusive, so surface a
+   held-out set. *Follow-ups:* GBIF source diversity ✅ shipped in v8; seasonal
+   stratification was tried (v7) and rejected — see below; the pool is CC-BY-NC-inclusive, so surface a
    NOTICE/credits file and note the NonCommercial provenance at ship time.
 4. **Safety architecture — OOD / "not a plant".** Measured, see below. A post-hoc
    energy gate was **evaluated and rejected**; the fix is training signal instead.
