@@ -5,9 +5,13 @@ struct PatrolView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.scenePhase) private var scenePhase
     @State private var showAROverlay = false
+    /// Bumped when the DEBUG record button toggles, so the label refreshes
+    /// (DataRecorder is not observable).
+    @State private var recordingTick = 0
     /// Snapshot of the detection the AR sheet was opened for. `lastDetection`
-    /// expires after a couple of seconds (its box is only valid briefly), which
-    /// would otherwise blank the AR sheet while the user is still looking at it.
+    /// can be replaced by a newer detection, expire (detectionCardLifetime) or
+    /// be dismissed while the sheet is open, which would otherwise blank the AR
+    /// sheet while the user is still looking at it.
     @State private var arDetection: DetectionResult?
     @State private var savedBrightness: CGFloat?
     @State private var showingCorrection = false
@@ -104,7 +108,37 @@ struct PatrolView: View {
                         .background(.black.opacity(0.5))
                         .clipShape(Capsule())
 
-                        if DataRecorder.shared.isRecording {
+                        #if DEBUG
+                        // Session recording (video + IMU + events) for offline
+                        // analysis — see GAIT_CAPTURE.md. Only reachable here:
+                        // the Debug screen cannot start one because leaving
+                        // Patrol stops the patrol it needs.
+                        if appState.isPatrolling {
+                            Button {
+                                if DataRecorder.shared.isRecording {
+                                    DataRecorder.shared.stop { DispatchQueue.main.async { recordingTick += 1 } }
+                                } else {
+                                    _ = DataRecorder.shared.start(videoSettings: DataRecorder.defaultVideoSettings)
+                                }
+                                recordingTick += 1
+                            } label: {
+                                HStack(spacing: 4) {
+                                    Circle().fill(DataRecorder.shared.isRecording ? .red : .white.opacity(0.6))
+                                        .frame(width: 8, height: 8)
+                                    Text(DataRecorder.shared.isRecording ? "REC" : "Record")
+                                        .font(.caption2.bold())
+                                        .foregroundStyle(.white)
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(.black.opacity(0.5))
+                                .clipShape(Capsule())
+                            }
+                            .accessibilityIdentifier("patrol.record")
+                            .id(recordingTick)
+                        }
+                        #else
+                                                if DataRecorder.shared.isRecording {
                             HStack(spacing: 4) {
                                 Circle().fill(.red).frame(width: 8, height: 8)
                                 Text("REC")
@@ -116,6 +150,7 @@ struct PatrolView: View {
                             .background(.black.opacity(0.5))
                             .clipShape(Capsule())
                         }
+                        #endif
 
                         // Long-press to toggle live preview
                         Image(systemName: livePreviewEnabled ? "camera.fill" : "camera")

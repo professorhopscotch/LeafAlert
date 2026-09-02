@@ -121,7 +121,7 @@ final class AppState: ObservableObject {
     /// The main-actor half of a detection: alerts, the on-screen card and box,
     /// and the log. Shared by the live pipeline and the DEBUG injection hook so
     /// the two paths cannot drift apart.
-    private func handleDetection(_ result: DetectionResult, imageData: Data?) {
+    private func handleDetection(_ result: DetectionResult, imageData: Data?, synthetic: Bool = false) {
         // A late completion from an in-flight inference must not mutate state
         // or fire alerts after the user stopped the patrol.
         guard isPatrolling else { return }
@@ -146,7 +146,7 @@ final class AppState: ObservableObject {
 
         // Log every detection regardless of gating so the map/history records
         // everything.
-        detectionLogStore.save(result: result, imageData: imageData)
+        detectionLogStore.save(result: result, imageData: imageData, synthetic: synthetic)
     }
 
     #if DEBUG
@@ -161,7 +161,7 @@ final class AppState: ObservableObject {
             confidence: confidence,
             boundingBox: CGRect(x: 0.3, y: 0.35, width: 0.4, height: 0.3)
         )
-        handleDetection(result, imageData: Self.placeholderJPEG())
+        handleDetection(result, imageData: Self.placeholderJPEG(), synthetic: true)
     }
 
     private static func placeholderJPEG() -> Data? {

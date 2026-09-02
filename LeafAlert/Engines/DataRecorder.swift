@@ -77,6 +77,15 @@ final class DataRecorder {
 
     // MARK: - Lifecycle
 
+    /// The video settings every UI entry point uses (640×480 H.264, 2 Mbps):
+    /// small enough for long walks, big enough to see what the model saw.
+    static let defaultVideoSettings: [String: Any] = [
+        AVVideoCodecKey: AVVideoCodecType.h264,
+        AVVideoWidthKey: 640,
+        AVVideoHeightKey: 480,
+        AVVideoCompressionPropertiesKey: [AVVideoAverageBitRateKey: 2_000_000],
+    ]
+
     /// Start a new recording session. Returns true on success.
     @discardableResult
     func start(videoSettings: [String: Any]) -> Bool {

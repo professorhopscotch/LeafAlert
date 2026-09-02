@@ -49,10 +49,14 @@ refractory and smoothing are compile-time constants.
 
 The sign fix was made by reasoning; this measures it.
 
-1. Debug dashboard → start a **recording**, then start a patrol.
+1. Patrol screen → **Start Patrol**, then tap the **Record** pill in the status
+   bar (DEBUG builds; it turns into a red REC). Recording needs the running
+   patrol's camera and IMU, which is why it lives here and not on the Debug
+   screen — leaving Patrol stops the patrol.
 2. Walk briskly for 30–60 s holding the phone as you normally would.
-3. Stop the patrol (recording finalizes). With a sync folder set, the session
-   appears under `<sync folder>/recordings/<id>/` on the Mac.
+3. Tap REC (or Stop Patrol — stopping the patrol finalizes the recording). With
+   a sync folder set, the session appears under `<sync folder>/recordings/<id>/`
+   on the Mac; otherwise it is in the app's Documents/recordings/.
 4. Run:
 
    ```bash

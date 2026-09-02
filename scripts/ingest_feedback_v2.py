@@ -266,6 +266,12 @@ def resolve_label(entry):
     original = str(entry.get("originalPrediction", "") or "").strip()
     corrected = str(entry.get("correctedLabel", "") or "").strip()
 
+    # Fail closed on anything the app marks as synthetic (DEBUG-injected
+    # detections). The app no longer exports these at all; this guards older
+    # builds and hand-edited manifests. Skipped, never an error.
+    if entry.get("synthetic") is True or status.startswith("synthetic"):
+        return None, "synthetic", None
+
     if status in SKIP_STATUSES:
         return None, status, None  # skipped, not an error
 

@@ -48,7 +48,7 @@ final class DetectionLogStore: ObservableObject {
     // MARK: - CRUD
 
     /// Saves a new detection log entry from a detection result.
-    func save(result: DetectionResult, imageData: Data?) {
+    func save(result: DetectionResult, imageData: Data?, synthetic: Bool = false) {
         let location = locationManager.location
         let log = DetectionLog(
             id: result.id,
@@ -60,6 +60,7 @@ final class DetectionLogStore: ObservableObject {
             plantType: result.plantType,
             imageThumbData: imageData
         )
+        log.isSynthetic = synthetic
         modelContext.insert(log)
         try? modelContext.save()
     }
@@ -72,6 +73,11 @@ final class DetectionLogStore: ObservableObject {
         log.feedbackStatus = status
         log.correctedLabel = correctedLabel
         try? modelContext.save()
+
+        // A synthetic (injected) detection is a flat placeholder image with a
+        // made-up label. Recording the answer locally keeps the UI flow honest;
+        // exporting it would feed fabricated "feedback" into the training pool.
+        guard !log.isSynthetic else { return }
 
         // Export the feedback (image + manifest entry) for the retraining loop.
         // A "confirmed" tap exports the original prediction as the training label;

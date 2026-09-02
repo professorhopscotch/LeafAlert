@@ -16,6 +16,10 @@ final class DetectionLog {
     var plantType: String
     var feedbackStatus: String = "none"
     var correctedLabel: String?
+    /// True for detections pushed by the DEBUG `-injectDetection` hook. They
+    /// exist so the UI can be exercised without a camera; they must never
+    /// reach the training feedback pipeline (see DetectionLogStore.submitFeedback).
+    var isSynthetic: Bool = false
     @Attribute(.externalStorage) var imageThumbData: Data?
 
     var hasUserFeedback: Bool { feedbackStatus != "none" }

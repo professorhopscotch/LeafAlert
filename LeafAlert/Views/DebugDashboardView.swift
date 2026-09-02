@@ -410,21 +410,20 @@ struct DebugDashboardView: View {
                 }
             } else {
                 Button {
-                    let settings: [String: Any] = [
-                        AVVideoCodecKey: AVVideoCodecType.h264,
-                        AVVideoWidthKey: 640,
-                        AVVideoHeightKey: 480,
-                        AVVideoCompressionPropertiesKey: [
-                            AVVideoAverageBitRateKey: 2_000_000
-                        ]
-                    ]
-                    _ = recorder.start(videoSettings: settings)
+                    _ = recorder.start(videoSettings: DataRecorder.defaultVideoSettings)
                     recordingTick += 1
                 } label: {
                     Label("Start Recording", systemImage: "record.circle")
                         .foregroundStyle(.red)
                 }
                 .disabled(!appState.isPatrolling)
+                if !appState.isPatrolling {
+                    // Leaving the Patrol screen stops the patrol, so this button
+                    // can never be enabled from here. Say so instead of dimming.
+                    Text("Needs a running patrol — start the patrol and use the REC button on the Patrol screen.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
                 let dest = FeedbackExporter.shared.hasSyncFolder
                     ? "iCloud folder (auto-syncs to Mac)"

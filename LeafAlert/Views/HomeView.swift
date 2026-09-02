@@ -155,8 +155,17 @@ struct HomeView: View {
     private func recentDetectionRow(_ log: DetectionLog) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text(DetectionFormatting.plantDisplayName(log.plantType))
-                    .font(.subheadline.weight(.medium))
+                HStack(spacing: 6) {
+                    Text(DetectionFormatting.plantDisplayName(log.plantType))
+                        .font(.subheadline.weight(.medium))
+                    if log.isSynthetic {
+                        Text("SYNTHETIC")
+                            .font(.caption2.bold())
+                            .padding(.horizontal, 5).padding(.vertical, 1)
+                            .background(.orange.opacity(0.25))
+                            .clipShape(Capsule())
+                    }
+                }
                 Text(DetectionFormatting.relativeTimestamp(log.timestamp))
                     .font(.caption)
                     .foregroundStyle(.secondary)
