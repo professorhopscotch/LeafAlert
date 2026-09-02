@@ -35,7 +35,7 @@ from PIL import Image
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from train_v5 import PlantDetectorV5, CLASS_LABELS          # noqa: E402
+from train_v5 import PlantDetectorV5, load_v5, CLASS_LABELS          # noqa: E402
 from coreml_export import IMAGENET_MEAN, IMAGENET_STD       # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -49,8 +49,7 @@ UNCERTAINTY_MARGIN = 0.20
 
 
 def load_model(ckpt: Path) -> PlantDetectorV5:
-    m = PlantDetectorV5(num_classes=len(CLASS_LABELS), head="linear", pretrained=False)
-    m.load_state_dict(torch.load(str(ckpt), map_location="cpu", weights_only=True))
+    m = load_v5(ckpt)  # rebuilds the recorded backbone/head
     m.eval()
     return m
 

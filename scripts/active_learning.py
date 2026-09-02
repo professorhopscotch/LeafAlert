@@ -163,7 +163,7 @@ from torchvision import transforms as T
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from train_v5 import (                                    # noqa: E402
-    PlantDetectorV5, CLASS_LABELS, IMAGE_SIZE, build_val_transforms,
+    PlantDetectorV5, load_v5, CLASS_LABELS, IMAGE_SIZE, build_val_transforms,
 )
 from coreml_export import IMAGENET_MEAN, IMAGENET_STD     # noqa: E402
 # Hashing / leakage guard: IMPORTED, never mirrored, so semantics cannot drift from
@@ -239,8 +239,7 @@ def _assert_parity(tf) -> None:
 def load_model(ckpt: Path, device: torch.device) -> PlantDetectorV5:
     if not ckpt.exists():
         raise SystemExit(f"ERROR: checkpoint not found: {ckpt}")
-    model = PlantDetectorV5(num_classes=len(CLASS_LABELS), head="linear", pretrained=False)
-    model.load_state_dict(torch.load(str(ckpt), map_location="cpu", weights_only=True))
+    model = load_v5(ckpt)  # rebuilds the recorded backbone/head
     model.eval()
     model.to(device)
     return model

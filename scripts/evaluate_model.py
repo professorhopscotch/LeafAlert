@@ -151,13 +151,6 @@ def detect_arch(state: dict) -> str:
     )
 
 
-def _v5_head_kind(state: dict) -> str:
-    """A bottleneck v5 head (1280->256->4) adds a second Linear at head.5; a
-    linear head (1280->4) stops at head.1. Pick the head so the constructed
-    module matches the checkpoint exactly for load_state_dict."""
-    return "bottleneck" if any(k.startswith("head.5.") for k in state) else "linear"
-
-
 def build_torch_model(checkpoint: Path, arch: str = "auto"):
     """Load a torch checkpoint into the correct architecture.
 
@@ -171,12 +164,11 @@ def build_torch_model(checkpoint: Path, arch: str = "auto"):
     elif resolved == "v5":
         # Imported lazily: train_v5 -> coreml_export -> coremltools, and we want
         # the torch-only path (--skip-coreml) usable without coremltools.
-        from train_v5 import PlantDetectorV5
-        model = PlantDetectorV5(
-            num_classes=len(CANONICAL_CLASSES),
-            head=_v5_head_kind(state),
-            pretrained=False,  # weights come from the checkpoint, not ImageNet
-        )
+        # load_v5 rebuilds the backbone/head the checkpoint was trained with
+        # (JSON sidecar, else inferred from the keys) — v9 candidates are no
+        # longer all efficientnet_b0.
+        from train_v5 import load_v5
+        return load_v5(checkpoint), resolved
     else:
         raise ValueError(f"unknown --arch '{arch}' (expected auto|distilled|v5)")
     model.load_state_dict(state)

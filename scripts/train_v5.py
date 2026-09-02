@@ -48,6 +48,7 @@ Output:
 """
 
 import argparse
+import json
 import random
 import sys
 from collections import Counter, defaultdict
@@ -429,13 +430,14 @@ class PlantDetectorV5(nn.Module):
     """
 
     def __init__(self, num_classes: int, head: str = "linear",
-                 dropout: float = 0.3, pretrained: bool = True):
+                 dropout: float = 0.3, pretrained: bool = True,
+                 backbone: str = "efficientnet_b0"):
         super().__init__()
-        # num_classes=0 -> backbone returns the 1280-d globally-pooled feature.
-        self.backbone = timm.create_model(
-            "efficientnet_b0", pretrained=pretrained, num_classes=0
-        )
-        feat_dim = self.backbone.num_features  # 1280
+        # num_classes=0 -> backbone returns the globally-pooled feature
+        # (1280-d for efficientnet_b0, 1408-d for b2, 768-d for convnext_tiny).
+        self.backbone_name = backbone
+        self.backbone = timm.create_model(backbone, pretrained=pretrained, num_classes=0)
+        feat_dim = self.backbone.num_features
         if head == "linear":
             self.head = nn.Sequential(
                 nn.Dropout(dropout),
@@ -457,6 +459,59 @@ class PlantDetectorV5(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         feat = self.backbone(x)      # [B, 1280]
         return self.head(feat)       # [B, num_classes] logits
+
+
+# Backbones the training/eval/export path has been exercised with. Any timm
+# name works mechanically; these are the ones whose Core ML export is known good.
+SUPPORTED_BACKBONES = ("efficientnet_b0", "efficientnet_b2", "convnext_tiny")
+
+
+def sidecar_path(ckpt: Path) -> Path:
+    """Checkpoints are raw state_dicts (so `weights_only` loads keep working);
+    the architecture lives in a JSON sidecar next to the .pth."""
+    return ckpt.with_suffix(ckpt.suffix + ".json")
+
+
+def infer_head(state: dict) -> str:
+    """A bottleneck head adds a second Linear at head.5; linear stops at head.1."""
+    return "bottleneck" if any(k.startswith("head.5.") for k in state) else "linear"
+
+
+def infer_backbone(state: dict) -> str:
+    """Best-effort fallback for checkpoints without a sidecar (v5-v8 are all
+    efficientnet_b0): timm ConvNeXt keys start with stem./stages., EfficientNet
+    with conv_stem./blocks.; the b0/b2 split is the pooled feature width."""
+    if any(k.startswith("backbone.stem.") for k in state):
+        return "convnext_tiny"
+    w = state.get("head.1.weight")
+    width = int(w.shape[1]) if w is not None else 1280
+    return {1280: "efficientnet_b0", 1408: "efficientnet_b2"}.get(width, "efficientnet_b0")
+
+
+def save_checkpoint(model: PlantDetectorV5, ckpt: Path):
+    ckpt.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(model.state_dict(), str(ckpt))
+    sidecar_path(ckpt).write_text(json.dumps({
+        "backbone": model.backbone_name, "head": model.head_kind,
+        "num_classes": len(CLASS_LABELS), "image_size": IMAGE_SIZE,
+    }, indent=2) + "\n")
+
+
+def load_v5(ckpt: Path, pretrained: bool = False) -> PlantDetectorV5:
+    """Rebuild the exact architecture a checkpoint was trained with (sidecar
+    first, key inference second) and load it. Eval mode, CPU."""
+    ckpt = Path(ckpt)
+    state = torch.load(str(ckpt), map_location="cpu", weights_only=True)
+    meta = json.loads(sidecar_path(ckpt).read_text()) if sidecar_path(ckpt).exists() else {}
+    model = PlantDetectorV5(
+        num_classes=len(CLASS_LABELS),
+        head=meta.get("head") or infer_head(state),
+        pretrained=pretrained,
+        backbone=meta.get("backbone") or infer_backbone(state),
+    )
+    model.load_state_dict(state)
+    model.eval()
+    return model
 
 
 def freeze_backbone(model: PlantDetectorV5, freeze: bool):
@@ -535,8 +590,9 @@ def export(model: PlantDetectorV5, out_path: Path, image_size: int):
     raw 0-255 RGB). Prints the resulting path."""
     short_description = (
         "Detects poison ivy, poison oak, and poison sumac from camera images. "
-        "EfficientNet-B0 (timm) with a light head, trained directly (v5, no "
-        "distillation) with motion-blur / defocus / occlusion augmentation. "
+        f"{model.backbone_name} (timm) with a light head, trained directly (v5 "
+        "recipe, no distillation) with motion-blur / defocus / occlusion "
+        "augmentation. "
         f"Classes: {', '.join(CLASS_LABELS)}"
     )
     model.eval().cpu()
@@ -564,6 +620,8 @@ def build_argparser():
     p.add_argument("--weight-decay", type=float, default=1e-4)
     p.add_argument("--label-smoothing", type=float, default=0.1)
     p.add_argument("--dropout", type=float, default=0.3)
+    p.add_argument("--backbone", choices=SUPPORTED_BACKBONES, default="efficientnet_b0",
+                   help="timm backbone; recorded in a JSON sidecar next to the checkpoint.")
     p.add_argument("--head", choices=["linear", "bottleneck"], default="linear",
                    help="Classifier head: light linear (default) or small bottleneck.")
     p.add_argument("--val-frac", type=float, default=0.2,
@@ -658,6 +716,7 @@ def main():
     print(f"\nBuilding EfficientNet-B0 + '{args.head}' head "
           f"(pretrained={pretrained})...")
     model = PlantDetectorV5(
+        backbone=args.backbone,
         num_classes=len(CLASS_LABELS), head=args.head,
         dropout=args.dropout, pretrained=pretrained,
     ).to(device)
@@ -743,7 +802,7 @@ def main():
 
     ckpt_path = Path(args.checkpoint)
     ckpt_path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(model.state_dict(), str(ckpt_path))
+    save_checkpoint(model, ckpt_path)
     print(f"Saved checkpoint: {ckpt_path.resolve()}")
 
     # ── Export ──
