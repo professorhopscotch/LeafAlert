@@ -363,6 +363,8 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     ap.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT)
+    ap.add_argument("--arch", choices=["auto", "distilled", "v5"], default="auto",
+                    help="Checkpoint architecture; auto-detected from the keys.")
     ap.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR,
                     help="ImageFolder-style dir with poison_ivy/oak/sumac/safe_plants subdirs.")
     ap.add_argument("--threshold", type=float, default=0.5,
@@ -390,9 +392,13 @@ def main():
         device = torch.device(args.device)
 
     # Model.
-    model = PlantDetectorNet(len(CLASS_NAMES))
-    state = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
-    model.load_state_dict(state)
+    # Any checkpoint: the old distilled PlantDetectorNet or a v5-recipe model of
+    # any backbone. evaluate_model.build_torch_model auto-detects the arch from
+    # the state_dict keys; this script used to hard-code PlantDetectorNet and
+    # could not run against any model shipped since v5.
+    from evaluate_model import build_torch_model
+    model, resolved = build_torch_model(args.checkpoint, args.arch)
+    print(f"  torch architecture: {resolved}")
     model.eval().to(device)
 
     # Data.
