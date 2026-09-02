@@ -5,6 +5,21 @@ import SwiftData
 struct LeafAlertApp: App {
     @StateObject private var appState = AppState()
 
+    init() {
+        #if DEBUG
+        // UI tests launch with `-resetSettings 1` so persisted simulator state
+        // (a moved sensitivity slider, toggles) cannot change what a test
+        // expects. The disclaimer flag is deliberately left alone: the tests
+        // handle the sheet either way, and the detection log is store-backed.
+        if UserDefaults.standard.bool(forKey: "resetSettings") {
+            for key in ["sensitivityThreshold", "audioAlertsEnabled", "screenDimLevel",
+                        "batterySaverEnabled", "livePreviewEnabled", "debugSaveFrames"] {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+        }
+        #endif
+    }
+
     var body: some Scene {
         WindowGroup {
             HomeView()

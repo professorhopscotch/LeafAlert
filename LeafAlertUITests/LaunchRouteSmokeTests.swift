@@ -16,7 +16,9 @@ final class LaunchRouteSmokeTests: XCTestCase {
     /// Launches on `route` and clears the first-run disclaimer if it is up.
     private func launch(route: String? = nil, extra: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
-        var args = extra
+        // Persisted settings reset on every launch (see LeafAlertApp.init) so a
+        // slider moved in an earlier session cannot flip an expectation.
+        var args = ["-resetSettings", "1"] + extra
         if let route { args += ["-launchRoute", route] }
         app.launchArguments = args
         // A fresh simulator (CI) shows the camera / location permission alerts
