@@ -123,6 +123,47 @@ or tune on it.
    Still open: active learning from the app's user-feedback loop, and the residual
    poison_ivy/oak per-class recall.
 
+## Traceability: headline numbers come from `scripts/operating_point.py`
+
+The "confident miss / full-alert recall / surfaced / false alarm" figures in this
+file are the APP's decision — top-1 class + its probability against the per-class
+`ToxicityThresholds` and the uncertainty band — not evaluate_model's uniform-
+threshold sweep. `scripts/operating_point.py` reproduces that decision, parsing
+the thresholds from `DetectionResult.swift` so it cannot drift, and reproduces
+v8's shipped row exactly (8.0 / 89.7 / 92.0 / 24 / 74.0):
+
+```bash
+.venv/bin/python scripts/operating_point.py --checkpoint checkpoints/student_v8_gbif.pth --blur 15
+```
+
+(`--blur` uses this script's own 224-px horizontal kernel — v8 reads 8.7% flip
+under it; the historical 11.8% came from `robustness_report.py`'s kernel. Compare
+models under one kernel, not across them.)
+
+## Rejected experiment: v9-B2 (EfficientNet-B2 backbone, same recipe/data)
+
+Hypothesis: v8's weak axis is ivy/oak separation (recall 62/69), so a stronger
+backbone at the same 224 input should help without touching the parity contract.
+`train_v5.py --backbone efficientnet_b2` (40 epochs, seed 42, otherwise identical).
+
+| Metric (held-out n=362, app thresholds) | **v8 (shipped)** | v9-B2 |
+|---|---|---|
+| Confident toxic→"safe" miss | **8.0%** (21) | 8.4% (22) |
+| Full-alert toxic recall | **89.7%** | 87.0% |
+| Toxic surfaced (alert + verify) | **92.0%** | 91.6% |
+| Safe→toxic false alarm (surfaced) | **24%** | 28% |
+| Overall accuracy | 74.0% | 74.3% |
+| Per-class recall (argmax) | ivy 62 / oak 69 / sumac 86 | ivy 68 / oak 67 / sumac 88 |
+| Blur k=15 toxic→safe flip (this kernel) | **8.7%** | 10.4% |
+| OOD non-plant → full toxic alert (n=200) | 7.0% | 7.0% |
+
+**Rejected.** Accuracy is a wash and every safety axis is slightly worse; B2
+traded oak/safe recall for ivy recall. With ~7.4k training images the extra
+capacity is not the bottleneck — data diversity was (v8), and calibration is
+already good. Checkpoint kept for reference: `checkpoints/student_v9_effb2.pth`
+(sidecar records the backbone). A ConvNeXt-tiny candidate is reported below
+when its run completes.
+
 ## Rejected experiment: v7 (seasonal rebalance) — DO NOT retry blindly
 
 Hypothesis: poison_ivy/oak recall was weak because their training data was
