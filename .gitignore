@@ -62,3 +62,6 @@ build_device/
 
 # Unsigned device build used to verify the arm64 target compiles
 build_device_nosign/
+
+# Local browser-preview config (session tooling)
+.claude/launch.json
