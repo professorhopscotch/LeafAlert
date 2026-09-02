@@ -59,3 +59,6 @@ data_staging/
 
 # Device build output (xcodebuild -derivedDataPath build_device)
 build_device/
+
+# Unsigned device build used to verify the arm64 target compiles
+build_device_nosign/
