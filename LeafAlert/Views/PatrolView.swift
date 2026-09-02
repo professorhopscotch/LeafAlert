@@ -5,6 +5,10 @@ struct PatrolView: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.scenePhase) private var scenePhase
     @State private var showAROverlay = false
+    /// Snapshot of the detection the AR sheet was opened for. `lastDetection`
+    /// expires after a couple of seconds (its box is only valid briefly), which
+    /// would otherwise blank the AR sheet while the user is still looking at it.
+    @State private var arDetection: DetectionResult?
     @State private var savedBrightness: CGFloat?
     @State private var showingCorrection = false
     @State private var selectedCorrection: String?
@@ -183,8 +187,12 @@ struct PatrolView: View {
                 appState.captureEngine.start()
             }
         }) {
-            if let detection = appState.lastDetection {
-                AROverlayView(detectionResult: detection)
+            if let detection = arDetection {
+                // The sheet is its own presentation context, outside Home's stack,
+                // so it needs a stack of its own for "Learn about this plant" to push.
+                NavigationStack {
+                    AROverlayView(detectionResult: detection)
+                }
             }
         }
         .onChange(of: showAROverlay) { _, isShowing in
@@ -339,6 +347,7 @@ struct PatrolView: View {
 
                 // View in AR
                 Button {
+                    arDetection = detection
                     showAROverlay = true
                 } label: {
                     Image(systemName: "arkit")

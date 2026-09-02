@@ -2,12 +2,17 @@ import SwiftUI
 
 /// Reference view showing identification details for toxic plants.
 struct PlantDetailView: View {
+    /// When set, opens straight to that plant's detail (used by the AR sheet's
+    /// "Learn about this plant"). Otherwise shows the guide list.
     var selectedPlantID: String? = nil
 
-    @State private var navigationPath: [String] = []
-
+    // No NavigationStack of its own: this view is always PUSHED — from Home's
+    // stack or the AR sheet's. A nested stack inside a navigationDestination
+    // makes SwiftUI drop the push, so routing to Plants silently landed on Home.
     var body: some View {
-        NavigationStack(path: $navigationPath) {
+        if let selectedPlantID, let plant = PlantInfo.find(by: selectedPlantID) {
+            plantDetail(plant)
+        } else {
             List(PlantInfo.all) { plant in
                 NavigationLink(value: plant.id) {
                     HStack {
@@ -30,11 +35,6 @@ struct PlantDetailView: View {
                 if let plant = PlantInfo.find(by: plantID) {
                     plantDetail(plant)
                 }
-            }
-        }
-        .onAppear {
-            if let selectedPlantID, navigationPath.isEmpty {
-                navigationPath = [selectedPlantID]
             }
         }
     }
