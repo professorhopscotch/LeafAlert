@@ -818,13 +818,13 @@ def main():
     if not (args.no_export or args.smoke):
         print(f"  coreml     : {Path(args.coreml_out).resolve()}")
     print("Next: evaluate on the FROZEN held-out set, then RE-DERIVE thresholds.")
-    print("  * scripts/evaluate_model.py --coreml <mlpackage> --data TrainingData/Testing")
-    print("    (evaluate via the .mlpackage — it is self-contained. NOTE: the")
-    print("     --checkpoint torch path in evaluate_model.py loads distill_model's")
-    print("     PlantDetectorNet and will NOT accept this v5 state_dict; point that")
-    print("     tooling at PlantDetectorV5 or just eval the exported Core ML model.)")
-    print("  * scripts/calibration_report.py + robustness_report.py")
-    print("  * RE-DERIVE LeafAlert/Models/ToxicityThresholds.swift (model-specific).")
+    print(f"  * scripts/operating_point.py --checkpoint {ckpt_path} --blur 15")
+    print("      (the APP's decision with the shipped per-class thresholds — the headline numbers)")
+    print(f"  * scripts/evaluate_model.py --checkpoint {ckpt_path} --arch v5 --coreml <mlpackage>")
+    print("      (torch<->Core ML parity + uniform-threshold sweep; all tools rebuild this")
+    print("       checkpoint's backbone from its JSON sidecar)")
+    print(f"  * scripts/calibration_report.py / ood_report.py / robustness_report.py --checkpoint {ckpt_path}")
+    print("  * RE-DERIVE ToxicityThresholds.baseAlert (LeafAlert/Models/DetectionResult.swift) if needed.")
     print("=" * 64)
 
 

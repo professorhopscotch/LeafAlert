@@ -162,8 +162,10 @@ def build_torch_model(checkpoint: Path, arch: str = "auto"):
     if resolved == "distilled":
         model = PlantDetectorNet(len(CANONICAL_CLASSES))
     elif resolved == "v5":
-        # Imported lazily: train_v5 -> coreml_export -> coremltools, and we want
-        # the torch-only path (--skip-coreml) usable without coremltools.
+        # Imported lazily so the DISTILLED path stays coremltools-free. The v5
+        # path is not: train_v5 imports coreml_export, which imports coremltools
+        # at module load — so --skip-coreml still needs coremltools installed
+        # for v5+ checkpoints.
         # load_v5 rebuilds the backbone/head the checkpoint was trained with
         # (JSON sidecar, else inferred from the keys) — v9 candidates are no
         # longer all efficientnet_b0.

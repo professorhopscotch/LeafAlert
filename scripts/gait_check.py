@@ -5,7 +5,9 @@ Answers the two questions the gait-timed capture depends on but the app cannot
 verify by itself:
 
 1. SIGN — is `down = -(userAcceleration · gravity)` really "positive = accelerating
-   toward the earth"? Walking has a built-in asymmetry: heel-strike arrests the
+   toward the earth"? (Computed here from the raw columns: this validates the
+   CONVENTION on real data. It cannot see the app's code — the APP check below
+   does that, by comparing the app's own apex stamps with the offline extrema.) Walking has a built-in asymmetry: heel-strike arrests the
    body's fall with a sharp UPWARD jolt (a sharp NEGATIVE `down` spike), while the
    top of the bounce is a smooth positive maximum bounded by ~1 g. So over walking
    samples the series should be negatively skewed, with the largest excursions on
@@ -103,8 +105,36 @@ def detect_apexes(t: np.ndarray, down: np.ndarray) -> np.ndarray:
         prev, prev_delta = smoothed, delta
         if is_peak and ti - last_fire >= REFRACTORY_S:
             last_fire = ti
-            apexes.append(t[i - 1] if i > 0 else ti)
+            # Same stamp as CaptureEngine: the sample on which the detector
+            # fires (one sample AFTER the true maximum), so app apex_ts and
+            # offline apexes are comparable one-to-one.
+            apexes.append(ti)
     return np.asarray(apexes)
+
+
+def app_alignment(apex_ts: np.ndarray, t: np.ndarray, down: np.ndarray) -> dict:
+    """Does the APP's projection agree with the offline one?
+
+    The skew test only says the offline `-(ua·g)` has the right shape; it is
+    computed from raw columns and cannot see the app's code. This can: the app
+    logs the CoreMotion timestamp of each apex that opened a window (`apex_ts`).
+    If the app's sign were inverted again, those stamps would sit on the
+    offline MINIMA (heel-strike) instead of the maxima."""
+    maxima = detect_apexes(t, down)
+    minima = detect_apexes(t, -down)
+    if len(apex_ts) == 0 or len(maxima) == 0 or len(minima) == 0:
+        return {"n": int(len(apex_ts)), "verdict": "no apogee captures / no strides to compare"}
+    d_max = np.array([np.abs(maxima - a).min() for a in apex_ts])
+    d_min = np.array([np.abs(minima - a).min() for a in apex_ts])
+    near_max = int((d_max < d_min).sum()); near_min = int((d_min < d_max).sum())
+    if near_max >= 2 * max(1, near_min):
+        verdict = "APP AGREES with the offline maxima (projection sign correct)"
+    elif near_min >= 2 * max(1, near_max):
+        verdict = "APP INVERTED: its apex stamps sit on the offline minima (heel-strike)"
+    else:
+        verdict = "inconclusive (stamps split between maxima and minima)"
+    return {"n": int(len(apex_ts)), "near_maxima": near_max, "near_minima": near_min,
+            "median_offset_to_maxima_ms": float(np.median(d_max) * 1000), "verdict": verdict}
 
 
 def active_mask(t: np.ndarray, down: np.ndarray) -> np.ndarray:
@@ -186,12 +216,24 @@ def analyze(imu: dict, events: list[dict] | None) -> dict:
                 prior = apexes[apexes <= e["t"]]
                 if len(prior):
                     fallback.append((e["t"] - prior[-1]) * 1000.0)
+        stamps = []
+        for e in caps:
+            if e["kv"].get("trigger") == "apogee" and "apex_ts" in e["kv"]:
+                try:
+                    stamps.append(float(e["kv"]["apex_ts"]))
+                except ValueError:
+                    pass
+        alignment = (app_alignment(np.asarray(stamps), t, down)
+                     if imu["clock"] == "motion_ts" else
+                     {"n": int(len(stamps)), "verdict": "needs imu.csv with motion_ts (same clock as apex_ts)"})
+
         def summarize(v):
             a = np.asarray(v)
             return {"n": int(len(a)), "median_ms": float(np.median(a)),
                     "p25_ms": float(np.percentile(a, 25)), "p75_ms": float(np.percentile(a, 75))} if len(a) else {"n": 0}
         ph = {"captures": int(len(caps)), "by_trigger": by_trigger,
-              "direct": summarize(direct), "fallback": summarize(fallback)}
+              "direct": summarize(direct), "fallback": summarize(fallback),
+              "app_alignment": alignment}
         period = out["cadence"].get("median_period_s")
         for key in ("direct", "fallback"):
             if ph[key].get("n") and period:
@@ -223,6 +265,10 @@ def render(r: dict) -> str:
                          f"(IQR {d['p25_ms']:.0f}–{d['p75_ms']:.0f}){frac}")
         if not p["direct"].get("n") and not p["fallback"].get("n"):
             L.append("PHASE  no apogee-triggered captures to measure")
+        al = p.get("app_alignment", {})
+        if al.get("n"):
+            L.append(f"APP    {al['n']} apex stamps: {al.get('near_maxima', '?')} near offline maxima, "
+                     f"{al.get('near_minima', '?')} near minima → {al['verdict']}")
     return "\n".join(L)
 
 

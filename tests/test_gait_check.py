@@ -102,6 +102,25 @@ def test_legacy_log_without_motion_ts_falls_back_to_elapsed_clock(tmp_path):
     assert fb["n"] >= 5 and 40 < fb["median_ms"] < 200
 
 
+def test_app_alignment_detects_an_inverted_app_projection(tmp_path):
+    import gait_check as gc
+    t, down = synthetic_walk()
+    maxima = gc.detect_apexes(t, down)
+    minima = gc.detect_apexes(t, -down)
+    # App stamps on the maxima (correct sign) → agrees; on the minima → INVERTED.
+    ok = gc.app_alignment(maxima[5:25] + 0.004, t, down)
+    bad = gc.app_alignment(minima[5:25] + 0.004, t, down)
+    assert ok["verdict"].startswith("APP AGREES") and ok["near_maxima"] > ok["near_minima"]
+    assert bad["verdict"].startswith("APP INVERTED") and bad["near_minima"] > bad["near_maxima"]
+
+
+def test_session_report_includes_app_alignment_when_stamps_exist(tmp_path):
+    write_session(tmp_path)
+    r = gait_check.analyze(gait_check.load_imu(tmp_path / "imu.csv"), gait_check.load_events(tmp_path / "events.csv"))
+    al = r["phase"]["app_alignment"]
+    assert al["n"] >= 5 and al["verdict"].startswith("APP AGREES")
+
+
 def test_cli_renders_and_writes_json(tmp_path, capsys):
     write_session(tmp_path)
     out = tmp_path / "r.json"

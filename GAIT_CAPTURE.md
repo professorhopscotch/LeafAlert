@@ -63,8 +63,13 @@ What good looks like:
 
 - `SIGN  skew` clearly **negative**, with the negative extreme larger than the
   positive one → `CONSISTENT`. Heel-strike is a sharp upward jolt (negative
-  `down`); the apex is a smooth positive maximum bounded by ~1 g. A **positive**
-  skew means the projection is inverted again.
+  `down`); the apex is a smooth positive maximum bounded by ~1 g. This is
+  computed from the raw IMU columns, so it validates the *convention* on real
+  data — it cannot see the app's code.
+- `APP` — the check that does see the app: each apex the app used to open a
+  window is stamped (`apex_ts`) and compared with the offline extrema. Stamps
+  near the offline **maxima** → `APP AGREES`; near the **minima** (heel-strike)
+  → `APP INVERTED`, i.e. the projection sign regressed in the app.
 - `GAIT` cadence in the 90–130 steps/min range for a normal walk.
 - `PHASE apex→shutter` — the median latency from the detected apex to the frame's
   presentation timestamp, and what fraction of a stride that is. Under ~15 % of a
