@@ -57,4 +57,36 @@ final class LaunchRouteSmokeTests: XCTestCase {
                       "patrol rendered without the no-camera state (blank screen regression)")
         XCTAssertTrue(app.buttons["Stop Patrol"].exists)
     }
+
+    // MARK: - Detection card (synthetic detection; the simulator has no camera)
+
+    func testInjectedAlertShowsTheFeedbackCardAndKeepsItPastTheBoxExpiry() {
+        let app = launch(route: "patrol", extra: ["-autoStartPatrol", "1", "-injectDetection", "poison_ivy:0.72"])
+        let headline = app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] %@", "Likely Poison Ivy")).firstMatch
+        XCTAssertTrue(headline.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["Correct"].exists)
+        XCTAssertTrue(app.buttons["Wrong"].exists)
+        // The box expires after 2.5 s; the card must NOT go with it — it used to.
+        sleep(4)
+        XCTAssertTrue(app.buttons["Correct"].exists, "the feedback card vanished with the box expiry")
+    }
+
+    func testCorrectionFlowSubmitsAndDismissesTheCard() {
+        let app = launch(route: "patrol", extra: ["-autoStartPatrol", "1", "-injectDetection", "poison_oak:0.66"])
+        XCTAssertTrue(app.buttons["Wrong"].waitForExistence(timeout: 10))
+        app.buttons["Wrong"].tap()
+        XCTAssertTrue(app.staticTexts["What is it?"].waitForExistence(timeout: 3))
+        app.buttons["Safe Plant"].tap()
+        app.buttons["Submit"].tap()
+        XCTAssertTrue(app.buttons["Submit"].waitForNonExistence(timeout: 3))
+        XCTAssertFalse(app.buttons["Correct"].exists)
+    }
+
+    func testUncertainDetectionUsesHedgedCopy() {
+        // 0.30 is below poison_ivy's 0.40 alert bar but inside the 0.20 uncertainty margin.
+        let app = launch(route: "patrol", extra: ["-autoStartPatrol", "1", "-injectDetection", "poison_ivy:0.30"])
+        let headline = app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] %@", "Possible Poison Ivy")).firstMatch
+        XCTAssertTrue(headline.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] %@", "verify visually")).firstMatch.exists)
+    }
 }

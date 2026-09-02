@@ -19,7 +19,15 @@ final class AppState: ObservableObject {
     // MARK: - Published State
 
     @Published var isPatrolling = false
-    @Published var lastDetection: DetectionResult?
+    /// The detection the feedback card shows. Lives `detectionCardLifetime`
+    /// (or until the user answers/dismisses it) — long enough to act on.
+    @Published var lastDetection: DetectionResult? {
+        didSet { if lastDetection == nil { boxDetection = nil } }
+    }
+    /// The detection whose bounding box is drawn. Expires after
+    /// `detectionBoxLifetime`, independently of the card: the box is a spatial
+    /// claim that goes stale in seconds; the card is not.
+    @Published private(set) var boxDetection: DetectionResult?
     @AppStorage("hasShownDisclaimer") var hasShownDisclaimer = false
 
     // MARK: - Settings (synced from UserDefaults via AppStorage)
@@ -101,30 +109,7 @@ final class AppState: ObservableObject {
                 )
                 let imageData = self.imageConverter.jpegData(from: pixelBuffer)
                 DispatchQueue.main.async {
-                    // A late completion from an in-flight inference must not mutate
-                    // state or fire alerts after the user stopped the patrol.
-                    guard self.isPatrolling else { return }
-
-                    self.alertEngine.process(result)
-
-                    // Surface the warning card for any actionable toxic detection —
-                    // both full `.alert`s and `.uncertain` near-misses (which are
-                    // shown with hedged "verify visually" framing). Only truly
-                    // sub-floor `.ignore` detections stay silent. A safety app must
-                    // never present a confident all-clear.
-                    if InferenceEngine.toxicLabels.contains(result.plantType),
-                       ToxicityThresholds.severity(
-                           plantType: result.plantType,
-                           confidence: result.confidence,
-                           sensitivity: Float(self.sensitivityThreshold)
-                       ).isActionable {
-                        self.lastDetection = result
-                        self.scheduleDetectionExpiry(for: result)
-                    }
-
-                    // Log every detection regardless of gating so the map/history
-                    // records everything.
-                    self.detectionLogStore.save(result: result, imageData: imageData)
+                    self.handleDetection(result, imageData: imageData)
                 }
             }
         }
@@ -132,6 +117,59 @@ final class AppState: ObservableObject {
         captureEngine.start()
         isPatrolling = true
     }
+
+    /// The main-actor half of a detection: alerts, the on-screen card and box,
+    /// and the log. Shared by the live pipeline and the DEBUG injection hook so
+    /// the two paths cannot drift apart.
+    private func handleDetection(_ result: DetectionResult, imageData: Data?) {
+        // A late completion from an in-flight inference must not mutate state
+        // or fire alerts after the user stopped the patrol.
+        guard isPatrolling else { return }
+
+        alertEngine.process(result)
+
+        // Surface the warning card for any actionable toxic detection — both
+        // full `.alert`s and `.uncertain` near-misses (shown with hedged "verify
+        // visually" framing). Only truly sub-floor `.ignore` detections stay
+        // silent. A safety app must never present a confident all-clear.
+        if InferenceEngine.toxicLabels.contains(result.plantType),
+           ToxicityThresholds.severity(
+               plantType: result.plantType,
+               confidence: result.confidence,
+               sensitivity: Float(sensitivityThreshold)
+           ).isActionable {
+            lastDetection = result
+            boxDetection = result
+            scheduleBoxExpiry(for: result)
+            scheduleCardExpiry(for: result)
+        }
+
+        // Log every detection regardless of gating so the map/history records
+        // everything.
+        detectionLogStore.save(result: result, imageData: imageData)
+    }
+
+    #if DEBUG
+    /// Test hook: pushes a synthetic detection through the exact live path
+    /// (alerts, card, box, log) so the detection UX can be exercised and
+    /// UI-tested where there is no camera. `-injectDetection poison_ivy:0.72`.
+    func injectDebugDetection(plantType: String, confidence: Float) {
+        let result = DetectionResult(
+            plantType: plantType,
+            confidence: confidence,
+            boundingBox: CGRect(x: 0.3, y: 0.35, width: 0.4, height: 0.3)
+        )
+        handleDetection(result, imageData: Self.placeholderJPEG())
+    }
+
+    private static func placeholderJPEG() -> Data? {
+        let size = CGSize(width: 480, height: 640)
+        return UIGraphicsImageRenderer(size: size).image { ctx in
+            UIColor(red: 0.20, green: 0.45, blue: 0.20, alpha: 1).setFill()
+            ctx.fill(CGRect(origin: .zero, size: size))
+        }.jpegData(compressionQuality: 0.7)
+    }
+    #endif
 
     /// Stops the patrol pipeline.
     func stopPatrol() {
@@ -142,8 +180,10 @@ final class AppState: ObservableObject {
         if DataRecorder.shared.isRecording {
             DataRecorder.shared.stop()
         }
-        detectionExpiryTask?.cancel()
-        detectionExpiryTask = nil
+        boxExpiryTask?.cancel()
+        boxExpiryTask = nil
+        cardExpiryTask?.cancel()
+        cardExpiryTask = nil
         lastDetection = nil
         // Do NOT nil out captureEngine.onFrameCaptured here: it is read on the
         // capture queue while this runs on the main actor, and clearing it mid-
@@ -165,16 +205,36 @@ final class AppState: ObservableObject {
     /// consecutive detections while still expiring a stale one.
     nonisolated static let detectionBoxLifetime: TimeInterval = 2.5
 
-    private var detectionExpiryTask: Task<Void, Never>?
+    /// How long the feedback card stays up without a newer detection.
+    ///
+    /// Deliberately much longer than the box: the card is what the user answers
+    /// ("Correct" / "Wrong"), and that feedback is the only signal the active-
+    /// learning loop gets. Tying the card to the box lifetime made it vanish in
+    /// 2.5 s — before anyone could tap it.
+    nonisolated static let detectionCardLifetime: TimeInterval = 20
 
-    /// Clears `lastDetection` once its box can no longer be trusted, unless a newer
-    /// detection has already replaced it.
-    private func scheduleDetectionExpiry(for result: DetectionResult) {
-        detectionExpiryTask?.cancel()
-        detectionExpiryTask = Task { [weak self] in
+    private var boxExpiryTask: Task<Void, Never>?
+    private var cardExpiryTask: Task<Void, Never>?
+
+    /// Clears the box once it can no longer be trusted, unless a newer detection
+    /// has already replaced it.
+    private func scheduleBoxExpiry(for result: DetectionResult) {
+        boxExpiryTask?.cancel()
+        boxExpiryTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(Self.detectionBoxLifetime * 1_000_000_000))
             guard !Task.isCancelled, let self else { return }
-            // Only clear if this is still the detection on screen.
+            if self.boxDetection?.id == result.id {
+                self.boxDetection = nil
+            }
+        }
+    }
+
+    /// Clears the card after `detectionCardLifetime`, unless replaced or answered.
+    private func scheduleCardExpiry(for result: DetectionResult) {
+        cardExpiryTask?.cancel()
+        cardExpiryTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(Self.detectionCardLifetime * 1_000_000_000))
+            guard !Task.isCancelled, let self else { return }
             if self.lastDetection?.id == result.id {
                 self.lastDetection = nil
             }

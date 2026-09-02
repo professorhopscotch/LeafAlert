@@ -58,7 +58,7 @@ struct PatrolView: View {
                     }
 
                     // Bounding box overlay when detection has a valid region
-                    if let detection = appState.lastDetection,
+                    if let detection = appState.boxDetection,
                        detection.boundingBox != .zero {
                         BoundingBoxOverlay(
                             boundingBox: detection.boundingBox,
@@ -269,6 +269,19 @@ struct PatrolView: View {
             // is undefined behavior (it rendered a blank screen in the simulator).
             guard UserDefaults.standard.bool(forKey: "autoStartPatrol"), !appState.isPatrolling else { return }
             DispatchQueue.main.async { startPatrol() }
+            #if DEBUG
+            // `-injectDetection poison_ivy:0.72` pushes a synthetic detection
+            // through the live path a second later, so the card/box/feedback UX
+            // can be exercised and UI-tested without a camera.
+            if let spec = UserDefaults.standard.string(forKey: "injectDetection") {
+                let parts = spec.split(separator: ":")
+                let plant = String(parts.first ?? "poison_ivy")
+                let conf = parts.count > 1 ? (Float(parts[1]) ?? 0.7) : 0.7
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    appState.injectDebugDetection(plantType: plant, confidence: conf)
+                }
+            }
+            #endif
         }
         #endif
         .onDisappear {
