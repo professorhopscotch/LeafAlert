@@ -99,7 +99,7 @@ before anything else.
 
 ```sh
 # Confusion matrix, per-class P/R/F1, toxic-recall + miss-rate, threshold sweep
-.venv/bin/python scripts/evaluate_model.py --checkpoint checkpoints/student_distilled.pth \
+.venv/bin/python scripts/evaluate_model.py --checkpoint checkpoints/student_v8_gbif.pth --arch v5 \
     --coreml LeafAlert/Resources/MLModels/PlantDetector.mlpackage --data TrainingData/Testing --split held-out
 
 .venv/bin/python scripts/calibration_report.py   # ECE, reliability, temperature, threshold sweep

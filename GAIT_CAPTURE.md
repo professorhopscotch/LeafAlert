@@ -37,9 +37,10 @@ unit test (`testVerticalDownIsPositiveInFreeFall`) pins the convention.
   `forcedCaptureInterval` so the world is still seen if neither fires.
 - **Capture-time gate** — a frame is dropped if the rotation rate is above
   `rotationRateThreshold` (forced captures are exempt).
-- **Battery Saver** — the sensor drops to 10 fps while no window is open and is
-  restored to its exact saved rate on the next window, even if the setting was
-  switched off in between.
+- **Battery Saver** — the sensor drops to 10 fps during the post-capture
+  cooldown and is put back to its saved rate as soon as a window *could* open
+  (cooldown over), so the apex frame is taken at full cadence; the restore also
+  happens if the setting was switched off in between.
 
 The engine's intervals and thresholds default from `TuningDefaults` and can be
 changed live from Debug → Live Controls. `ApexDetector`'s peak floor,

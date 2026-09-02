@@ -375,27 +375,45 @@ final class CaptureEngine: NSObject, ObservableObject {
 
     /// Thread-safe flag: motion updates set true at apogee/stillness, captureQueue reads & resets.
     private let motionLock = NSLock()
-    private var _apogeeDetected = false
-    private var _lastMotionTrigger: CaptureTrigger = .forced
-    private var _lastApexTimestamp: TimeInterval = 0
+    /// The motion latch: "a capture-worthy instant happened; open a window".
+    /// Written by the motion handler, consumed by the duty cycle. All three
+    /// fields change together under ONE lock acquisition and are read as one
+    /// snapshot, so a consumer can never pair a fresh flag with a stale trigger
+    /// or apex timestamp (which mislabelled captures and logged the previous
+    /// stride's apex_ts).
+    private struct MotionLatch {
+        var armed = false
+        var trigger: CaptureTrigger = .forced
+        /// CoreMotion timestamp (device uptime clock) of the apex that armed the
+        /// latch; logged with the frame's presentation timestamp so the
+        /// apex→shutter phase can be measured offline (scripts/gait_check.py).
+        var apexTimestamp: TimeInterval = 0
+    }
+    private var _latch = MotionLatch()
 
-    private var apogeeDetected: Bool {
-        get { motionLock.lock(); defer { motionLock.unlock() }; return _apogeeDetected }
-        set { motionLock.lock(); defer { motionLock.unlock() }; _apogeeDetected = newValue }
+    private var latchSnapshot: MotionLatch {
+        motionLock.lock(); defer { motionLock.unlock() }
+        return _latch
     }
 
-    /// The type of motion event that last set apogeeDetected.
-    private var lastMotionTrigger: CaptureTrigger {
-        get { motionLock.lock(); defer { motionLock.unlock() }; return _lastMotionTrigger }
-        set { motionLock.lock(); defer { motionLock.unlock() }; _lastMotionTrigger = newValue }
+    private func arm(_ trigger: CaptureTrigger, apexTimestamp: TimeInterval? = nil) {
+        motionLock.lock(); defer { motionLock.unlock() }
+        _latch.armed = true
+        _latch.trigger = trigger
+        if let apexTimestamp { _latch.apexTimestamp = apexTimestamp }
     }
 
-    /// CoreMotion timestamp (device uptime clock) of the apex that set the latch.
-    /// Logged next to the frame's presentation timestamp so the apex→shutter
-    /// phase can be measured offline (scripts/gait_check.py).
-    private var lastApexTimestamp: TimeInterval {
-        get { motionLock.lock(); defer { motionLock.unlock() }; return _lastApexTimestamp }
-        set { motionLock.lock(); defer { motionLock.unlock() }; _lastApexTimestamp = newValue }
+    /// Arms only if nothing is latched — an apex is never relabelled as stillness.
+    private func armIfIdle(_ trigger: CaptureTrigger) {
+        motionLock.lock(); defer { motionLock.unlock() }
+        guard !_latch.armed else { return }
+        _latch.armed = true
+        _latch.trigger = trigger
+    }
+
+    private func disarmLatch() {
+        motionLock.lock(); defer { motionLock.unlock() }
+        _latch.armed = false
     }
 
     /// Whether the inference window is open (ready to capture a frame for ML).
@@ -509,7 +527,7 @@ final class CaptureEngine: NSObject, ObservableObject {
         dutyCycleTimer = nil
         // Drop any latch and detector history so the next patrol cannot open a
         // window on a stale apex from this one.
-        apogeeDetected = false
+        disarmLatch()
         motionLock.lock(); _apexDetector.reset(); _stillness.reset(); motionLock.unlock()
         removeSessionObservers()
 
@@ -549,7 +567,8 @@ final class CaptureEngine: NSObject, ObservableObject {
 
     /// Sensor frame rate between capture windows when Battery Saver is on. The
     /// preview gets choppier, which is the trade the user opted into; inside a
-    /// window the sensor returns to full rate so apex timing is unaffected.
+    /// cooldown ends the sensor returns to full rate (see manageDutyCycle) —
+    /// before any window can open — so the apex frame is taken at full cadence.
     private static let batterySaverIdleFPS: Double = 10
 
     /// captureQueue-only. Whether WE lowered the sensor rate. Tracked explicitly
@@ -710,13 +729,10 @@ final class CaptureEngine: NSObject, ObservableObject {
             // latched apex, or the capture log misattributes the trigger.
             if !rotationTooFast {
                 if isApex {
-                    self.lastApexTimestamp = motion.timestamp
-                    self.apogeeDetected = true
-                    self.lastMotionTrigger = .apogee
+                    self.arm(.apogee, apexTimestamp: motion.timestamp)
                     DispatchQueue.main.async { self.apogeeCount += 1 }
-                } else if isStill && !self.apogeeDetected {
-                    self.apogeeDetected = true
-                    self.lastMotionTrigger = .stillness
+                } else if isStill {
+                    self.armIfIdle(.stillness)
                 }
             }
 
@@ -756,19 +772,29 @@ final class CaptureEngine: NSObject, ObservableObject {
         let now = Date()
         let cooldown = isBatterySaverEnabled ? batterySaverInterval : minCaptureInterval
 
+        let timeSinceCapture = now.timeIntervalSince(lastCaptureTime)
+
+        // Battery Saver: put the sensor back to full rate as soon as a window
+        // COULD open (cooldown over), not when it does — otherwise the apex
+        // frame inherits the 10 fps cadence and arrives up to ~100 ms late.
+        if !isInferenceWindowOpen, timeSinceCapture >= cooldown, isThrottled, restoreFrameRate() {
+            isThrottled = false
+        }
+
+        let latch = latchSnapshot
         let decision = DutyCycle.decide(DutyCycle.Input(
             windowOpen: isInferenceWindowOpen,
             windowAge: now.timeIntervalSince(captureWindowOpenedAt),
             maxWindow: maxCaptureWindowDuration,
-            timeSinceCapture: now.timeIntervalSince(lastCaptureTime),
+            timeSinceCapture: timeSinceCapture,
             cooldown: cooldown,
             forcedInterval: forcedCaptureInterval,
-            apexLatched: apogeeDetected,
-            latchedTrigger: lastMotionTrigger,
+            apexLatched: latch.armed,
+            latchedTrigger: latch.trigger,
             processing: isProcessingFrame
         ))
 
-        if decision.consumeLatch { apogeeDetected = false }
+        if decision.consumeLatch { disarmLatch() }
 
         switch decision.action {
         case .none:
@@ -777,7 +803,7 @@ final class CaptureEngine: NSObject, ObservableObject {
             setInferenceWindow(open: false)
         case .openWindow(let trigger):
             lastTrigger = trigger
-            windowApexTimestamp = trigger == .apogee ? lastApexTimestamp : nil
+            windowApexTimestamp = trigger == .apogee ? latch.apexTimestamp : nil
             setInferenceWindow(open: true)
         }
     }

@@ -31,9 +31,11 @@ struct PatrolMapView: View {
         }
     }
 
-    /// Logs that have a real GPS fix and so can be plotted on the map.
+    /// Logs that have a real GPS fix and so can be plotted on the map. Synthetic
+    /// (DEBUG-injected) detections are excluded: a made-up plant pinned at a real
+    /// coordinate is exactly the misleading spatial claim this app must not make.
     private var mappableLogs: [DetectionLog] {
-        filteredLogs.filter { $0.hasLocation }
+        filteredLogs.filter { $0.hasLocation && !$0.isSynthetic }
     }
 
     var body: some View {
