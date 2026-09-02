@@ -65,3 +65,6 @@ build_device_nosign/
 
 # Local browser-preview config (session tooling)
 .claude/launch.json
+
+# Release-configuration simulator build (verification only)
+build_release/
