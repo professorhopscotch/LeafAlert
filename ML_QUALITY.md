@@ -168,6 +168,19 @@ v8's shipped row exactly (8.0 / 89.7 / 92.0 / 24 / 74.0):
 under it; the historical 11.8% came from `robustness_report.py`'s kernel. Compare
 models under one kernel, not across them.)
 
+### On-device parity (what the phone actually runs)
+
+The headline numbers are torch-side. The exported Core ML model (fp16, baked
+normalize + softmax) agrees with torch on the held-out set at **96.4% top-1
+(349/362), mean |Δp| 0.015, max 0.18**; Core ML accuracy is 73.2% vs torch
+74.0%. That drift is the floor for this export path — the rejected B2 export
+showed the same 96.4% / 0.016 — so a candidate whose parity is noticeably worse
+has an export problem, not a model problem. Command:
+
+```bash
+.venv/bin/python scripts/evaluate_model.py --checkpoint <pth> --arch v5 --coreml <mlpackage>
+```
+
 ## Rejected experiment: v9-B2 (EfficientNet-B2 backbone, same recipe/data)
 
 Hypothesis: v8's weak axis is ivy/oak separation (recall 62/69), so a stronger
