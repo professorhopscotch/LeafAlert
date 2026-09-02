@@ -165,6 +165,12 @@ final class CaptureEngine: NSObject, ObservableObject {
     /// user to enable camera access in Settings — the capture pipeline cannot run.
     @Published private(set) var cameraPermission: CameraPermission = .unknown
 
+    /// Whether a camera input actually came up when the patrol started. False
+    /// when the device has no usable back camera (in use by another app, a
+    /// hardware fault, or the simulator). The UI must say so rather than show a
+    /// dead preview behind a green "Patrolling" pill.
+    @Published private(set) var cameraAvailable = true
+
     /// Number of frames captured in the current 60-second window, for UI diagnostics.
     @Published private(set) var capturesPerMinute: Int = 0
 
@@ -404,7 +410,14 @@ final class CaptureEngine: NSObject, ObservableObject {
         isRunning = true
         DispatchQueue.main.async { self.pipelineActive = true }
 
+        // Publish whether a camera actually came up so the UI can say so.
+        let available = isConfigured
+        DispatchQueue.main.async { self.cameraAvailable = available }
+
         // Start the session (keeps it warm) but camera output starts disabled.
+        // Never run an input-less session: there is nothing for it to capture,
+        // and an unconfigured session behaves unpredictably across hosts.
+        guard isConfigured else { return }
         captureQueue.async { [weak self] in
             guard let self else { return }
             // If stop() was called before this block ran, bail out.

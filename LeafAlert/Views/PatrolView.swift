@@ -32,10 +32,30 @@ struct PatrolView: View {
         ZStack {
             if appState.isPatrolling {
                 if livePreviewEnabled {
-                    // Live camera preview
-                    CameraPreviewView(session: appState.captureEngine.session,
-                                      layerBox: previewLayerBox)
-                        .ignoresSafeArea()
+                    if appState.captureEngine.cameraAvailable {
+                        // Live camera preview
+                        CameraPreviewView(session: appState.captureEngine.session,
+                                          layerBox: previewLayerBox)
+                            .ignoresSafeArea()
+                    } else {
+                        // No camera came up (in use by another app, a hardware
+                        // fault, or the simulator). Say so instead of showing a
+                        // dead preview — detection is NOT running.
+                        Color.black.ignoresSafeArea()
+                        VStack(spacing: 12) {
+                            Image(systemName: "camera.slash")
+                                .font(.system(size: 48))
+                                .foregroundStyle(.orange)
+                            Text("Camera unavailable")
+                                .font(.title3.bold())
+                                .foregroundStyle(.white)
+                            Text("Detection is paused. Close other apps using the camera, then stop and restart the patrol.")
+                                .font(.subheadline)
+                                .foregroundStyle(.white.opacity(0.8))
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 32)
+                        }
+                    }
 
                     // Bounding box overlay when detection has a valid region
                     if let detection = appState.lastDetection,
@@ -69,10 +89,13 @@ struct PatrolView: View {
                 VStack {
                     HStack(spacing: 8) {
                         HStack(spacing: 6) {
+                            let engine = appState.captureEngine
+                            let healthy = engine.pipelineActive && engine.cameraAvailable
                             Circle()
-                                .fill(appState.captureEngine.pipelineActive ? .green : .red)
+                                .fill(healthy ? .green : .red)
                                 .frame(width: 8, height: 8)
-                            Text(appState.captureEngine.pipelineActive ? "Patrolling" : "Camera paused")
+                            Text(!engine.cameraAvailable ? "No camera"
+                                 : (engine.pipelineActive ? "Patrolling" : "Camera paused"))
                                 .font(.caption2.bold())
                                 .foregroundStyle(.white)
                         }
@@ -241,9 +264,11 @@ struct PatrolView: View {
         // simulator smoke test can exercise the live patrol UI (including the
         // no-camera degradation path) without a tap.
         .onAppear {
-            if UserDefaults.standard.bool(forKey: "autoStartPatrol"), !appState.isPatrolling {
-                startPatrol()
-            }
+            // Defer past the current SwiftUI update: starting the patrol publishes
+            // engine/app state, and publishing from inside onAppear's update pass
+            // is undefined behavior (it rendered a blank screen in the simulator).
+            guard UserDefaults.standard.bool(forKey: "autoStartPatrol"), !appState.isPatrolling else { return }
+            DispatchQueue.main.async { startPatrol() }
         }
         #endif
         .onDisappear {

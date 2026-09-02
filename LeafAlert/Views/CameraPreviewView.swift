@@ -38,7 +38,11 @@ struct CameraPreviewView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: PreviewUIView, context: Context) {
-        uiView.previewLayer.session = session
+        // Re-assigning the same session tears down and rebuilds the preview
+        // connection, and this runs on every SwiftUI update of the patrol screen.
+        if uiView.previewLayer.session !== session {
+            uiView.previewLayer.session = session
+        }
         layerBox?.set(uiView.previewLayer)
     }
 
