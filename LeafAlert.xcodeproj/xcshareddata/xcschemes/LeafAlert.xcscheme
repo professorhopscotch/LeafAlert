@@ -39,6 +39,16 @@
                ReferencedContainer = "container:LeafAlert.xcodeproj">
             </BuildableReference>
          </TestableReference>
+               <TestableReference
+            skipped = "NO">
+            <BuildableReference
+               BuildableIdentifier = "primary"
+               BlueprintIdentifier = "C5000001"
+               BuildableName = "LeafAlertUITests.xctest"
+               BlueprintName = "LeafAlertUITests"
+               ReferencedContainer = "container:LeafAlert.xcodeproj">
+            </BuildableReference>
+         </TestableReference>
       </Testables>
    </TestAction>
    <LaunchAction
