@@ -10,6 +10,7 @@
 		B2000001 /* ToxicityThresholdsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000001 /* ToxicityThresholdsTests.swift */; };
 		B2000002 /* DetectionPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000002 /* DetectionPresentationTests.swift */; };
 		B2000003 /* AlertEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000003 /* AlertEngineTests.swift */; };
+		B2000004 /* CaptureEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000004 /* CaptureEngineTests.swift */; };
 		A10000001 /* LeafAlertApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000001; };
 		A10000002 /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000002; };
 		A10000003 /* CaptureEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000003; };
@@ -61,6 +62,7 @@
 		B1000001 /* ToxicityThresholdsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ToxicityThresholdsTests.swift; sourceTree = "<group>"; };
 		B1000002 /* DetectionPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetectionPresentationTests.swift; sourceTree = "<group>"; };
 		B1000003 /* AlertEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AlertEngineTests.swift; sourceTree = "<group>"; };
+		B1000004 /* CaptureEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureEngineTests.swift; sourceTree = "<group>"; };
 		B3000001 /* LeafAlertTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LeafAlertTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A20000001 /* LeafAlertApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeafAlertApp.swift; sourceTree = "<group>"; };
 		A20000002 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
@@ -134,6 +136,7 @@ A20000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.p
 				B1000001 /* ToxicityThresholdsTests.swift */,
 				B1000002 /* DetectionPresentationTests.swift */,
 				B1000003 /* AlertEngineTests.swift */,
+				B1000004 /* CaptureEngineTests.swift */,
 			);
 			path = LeafAlertTests;
 			sourceTree = "<group>";
@@ -358,6 +361,7 @@ A20000016 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.p
 				B2000001 /* ToxicityThresholdsTests.swift in Sources */,
 				B2000002 /* DetectionPresentationTests.swift in Sources */,
 				B2000003 /* AlertEngineTests.swift in Sources */,
+				B2000004 /* CaptureEngineTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

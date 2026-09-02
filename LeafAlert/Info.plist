@@ -24,6 +24,17 @@
 	<true/>
 	<key>UILaunchScreen</key>
 	<dict/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.leafalert.app</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>leafalert</string>
+			</array>
+		</dict>
+	</array>
 	<key>UIRequiredDeviceCapabilities</key>
 	<array>
 		<string>arkit</string>

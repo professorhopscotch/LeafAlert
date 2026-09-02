@@ -10,29 +10,146 @@ struct CaptureContext {
     let timestamp: Date
 }
 
-/// Manages camera capture with physics-based timing and duty-cycled power management.
+// MARK: - Pure duty-cycle logic (hardware-free, unit-tested)
+
+/// Detects the stride APEX from the signed vertical acceleration stream.
 ///
-/// # Power Architecture
+/// Let `down` = userAcceleration · gravity. CoreMotion's `gravity` points toward
+/// the earth, so `down` is positive while the phone accelerates DOWNWARD and
+/// negative while it accelerates upward.
 ///
-/// The accelerometer (MEMS, ~1 mW) runs continuously at 100 Hz as a low-power trigger.
-/// The camera sensor (~200-400 mW) runs in a duty cycle:
+/// Over one walking bounce the body's vertical velocity is zero at the two
+/// turnarounds — the apex (top) and heel-strike (bottom) — and maximal in
+/// between. A zero-crossing of the ACCELERATION therefore marks maximum vertical
+/// speed: the blurriest instant, and exactly where the previous detector fired.
+/// The apex is where `down` PEAKS (support force is lowest at the top of the
+/// bounce); heel-strike is where it TROUGHS (impact). We want the apex: it is a
+/// turnaround (zero velocity) and, unlike heel-strike, it is smooth.
 ///
-///   1. Camera OFF (default) — only accelerometer running
-///   2. Apogee detected → camera ON, capture window opens
-///   3. First good frame captured → camera OFF, cooldown begins
-///   4. After cooldown interval → return to step 1
+/// So this is a local-MAXIMUM detector on a lightly smoothed `down`, with a
+/// magnitude floor to ignore sensor jitter while stationary and a refractory
+/// period so one stride cannot fire twice.
 ///
-/// This yields ~80-90% power savings vs. continuous 30 fps recording, while still
-/// capturing optimally-timed frames at stride apogee.
+/// Physics-derived; validate in the field against the DataRecorder IMU log.
+struct ApexDetector {
+    /// Peaks below this (g) are treated as jitter, not a stride.
+    var peakFloor: Double
+    /// Minimum time between fires (s). Brisk walking is ~2 Hz; 4 Hz is a hard ceiling.
+    var refractory: TimeInterval
+    /// EMA weight for the new sample; ~2-3 samples of lag at 100 Hz.
+    var smoothing: Double
+
+    private var smoothed: Double = 0
+    private var prev: Double = 0
+    private var prevDelta: Double = 0
+    private var lastFire: TimeInterval = -.infinity
+    private var samples = 0
+
+    init(peakFloor: Double = 0.03, refractory: TimeInterval = 0.25, smoothing: Double = 0.35) {
+        self.peakFloor = peakFloor
+        self.refractory = refractory
+        self.smoothing = smoothing
+    }
+
+    /// Feed one sample. Returns `true` exactly once per detected apex.
+    mutating func feed(down: Double, at t: TimeInterval) -> Bool {
+        smoothed = samples == 0 ? down : smoothing * down + (1 - smoothing) * smoothed
+        samples += 1
+        let delta = smoothed - prev
+        // Rising then falling: the previous sample was a local maximum.
+        let isPeak = prevDelta > 0 && delta <= 0 && prev >= peakFloor
+        prev = smoothed
+        prevDelta = delta
+        guard isPeak, t - lastFire >= refractory else { return false }
+        lastFire = t
+        return true
+    }
+
+    mutating func reset() {
+        smoothed = 0; prev = 0; prevDelta = 0; lastFire = -.infinity; samples = 0
+    }
+}
+
+/// The duty-cycle decision, factored out of the engine so it can be tested
+/// without a camera or motion sensors.
+enum DutyCycle {
+    enum Action: Equatable {
+        case none
+        case closeWindow
+        case openWindow(CaptureEngine.CaptureTrigger)
+    }
+
+    struct Input {
+        var windowOpen: Bool
+        var windowAge: TimeInterval
+        var maxWindow: TimeInterval
+        var timeSinceCapture: TimeInterval
+        var cooldown: TimeInterval
+        var forcedInterval: TimeInterval
+        var apexLatched: Bool
+        var latchedTrigger: CaptureEngine.CaptureTrigger
+        var processing: Bool
+    }
+
+    struct Decision: Equatable {
+        var action: Action
+        /// Whether the apex latch should be cleared. A latch set during the
+        /// cooldown is STALE by the time the cooldown ends — acting on it would
+        /// open the window at an arbitrary gait phase, on the cooldown clock.
+        /// Consuming it means only a FRESH apex after the cooldown can trigger.
+        var consumeLatch: Bool
+    }
+
+    static func decide(_ i: Input) -> Decision {
+        if i.windowOpen {
+            // A window that expires without a usable frame closes; any latch that
+            // accrued meanwhile is stale for the same reason as below.
+            return i.windowAge >= i.maxWindow
+                ? Decision(action: .closeWindow, consumeLatch: true)
+                : Decision(action: .none, consumeLatch: false)
+        }
+        if i.timeSinceCapture < i.cooldown || i.processing {
+            return Decision(action: .none, consumeLatch: true)
+        }
+        if i.apexLatched {
+            return Decision(action: .openWindow(i.latchedTrigger), consumeLatch: true)
+        }
+        if i.timeSinceCapture >= i.forcedInterval {
+            return Decision(action: .openWindow(.forced), consumeLatch: false)
+        }
+        return Decision(action: .none, consumeLatch: false)
+    }
+}
+
+/// Manages camera capture with motion-timed inference and duty-cycled power use.
 ///
-/// # Apogee Detection
+/// # What is actually gated
 ///
-/// During walking gait, net vertical acceleration (|a| - 1g) oscillates.
-/// The zero-crossing from positive to negative corresponds to the peak of each
-/// stride bounce — the moment of minimum phone motion and sharpest frames.
+/// The AVCaptureSession runs continuously while patrolling — the live preview
+/// needs it, and start/stop latency (hundreds of ms) would defeat apex timing.
+/// What the duty cycle gates is INFERENCE: the expensive per-frame work (CoreML,
+/// JPEG encode, saliency, disk). Between capture windows, frames flow only to the
+/// preview and to DataRecorder. Battery Saver additionally throttles the sensor
+/// frame rate between windows.
 ///
-/// At 100 Hz accelerometer + 30 fps camera, worst-case latency from apogee
-/// detection to captured frame is ~43 ms.
+/// # Timing
+///
+///   1. Window closed — accelerometer (~1 mW) runs at 100 Hz; frames are not inferred.
+///   2. Stride apex (or stillness) detected after the cooldown → window opens.
+///   3. First frame that passes the rotation gate is inferred → window closes,
+///      cooldown begins. A window that gets no usable frame within
+///      `maxCaptureWindowDuration` closes on its own.
+///   4. If no apex arrives within `forcedCaptureInterval`, a forced window opens
+///      so detection never silently stalls (e.g. standing still while panning).
+///
+/// # Apex detection
+///
+/// See `ApexDetector`. The apex is the top of the walking bounce — a velocity
+/// turnaround with the least blur. It is a local maximum of the downward
+/// acceleration, NOT a zero-crossing (which is the point of maximum speed).
+///
+/// At 100 Hz motion + 30 fps video, worst-case latency from apex to inferred
+/// frame is ~50 ms (duty-cycle poll) + ~33 ms (next frame).
 final class CaptureEngine: NSObject, ObservableObject {
 
     enum CaptureTrigger: String { case apogee, stillness, forced }
@@ -153,15 +270,9 @@ final class CaptureEngine: NSObject, ObservableObject {
         set { motionLock.lock(); defer { motionLock.unlock() }; _previousNetAccel = newValue }
     }
 
-    /// Previous SIGNED vertical acceleration (userAcceleration projected onto
-    /// gravity) for the apogee zero-crossing. Only touched on the motion queue,
-    /// but guarded for consistency with the other motion state.
-    private var _previousVertical: Double = 0.0
-
-    private var previousVertical: Double {
-        get { motionLock.lock(); defer { motionLock.unlock() }; return _previousVertical }
-        set { motionLock.lock(); defer { motionLock.unlock() }; _previousVertical = newValue }
-    }
+    /// Stride-apex detector. Fed on the motion queue; guarded by motionLock so
+    /// `stop()` can reset it from another thread.
+    private var _apexDetector = ApexDetector()
 
     /// Current rotation rate magnitude, updated on the motion queue.
     /// Read by duty cycle via motionLock.
@@ -209,11 +320,12 @@ final class CaptureEngine: NSObject, ObservableObject {
     /// Counter for the current 60-second window (accessed on captureQueue).
     private var frameCountInWindow: Int = 0
 
-    /// Timer that publishes `capturesPerMinute` and manages the duty cycle.
-    private var diagnosticsTimer: Timer?
+    /// Publishes `capturesPerMinute` once a minute. Dispatch timer on captureQueue.
+    private var diagnosticsTimer: DispatchSourceTimer?
 
-    /// Timer that polls for apogee events and manages camera power.
-    private var dutyCycleTimer: Timer?
+    /// Drives the duty cycle at 20 Hz. Dispatch timer on captureQueue (see
+    /// `startDutyCycleTimer` for why it is not a run-loop Timer).
+    private var dutyCycleTimer: DispatchSourceTimer?
 
     // MARK: - Lifecycle
 
@@ -283,10 +395,14 @@ final class CaptureEngine: NSObject, ObservableObject {
         // Set isRunning false immediately so the pending startRunning() block will bail out.
         isRunning = false
         motionManager.stopDeviceMotionUpdates()
-        diagnosticsTimer?.invalidate()
+        diagnosticsTimer?.cancel()
         diagnosticsTimer = nil
-        dutyCycleTimer?.invalidate()
+        dutyCycleTimer?.cancel()
         dutyCycleTimer = nil
+        // Drop any latch and detector history so the next patrol cannot open a
+        // window on a stale apex from this one.
+        apogeeDetected = false
+        motionLock.lock(); _apexDetector.reset(); motionLock.unlock()
         removeSessionObservers()
 
         captureQueue.async { [weak self] in
@@ -312,10 +428,51 @@ final class CaptureEngine: NSObject, ObservableObject {
         if open && !isInferenceWindowOpen {
             isInferenceWindowOpen = true
             captureWindowOpenedAt = Date()
+            updateFrameRateForWindow(open: true)
             DispatchQueue.main.async { self.isCameraActive = true }
         } else if !open && isInferenceWindowOpen {
             isInferenceWindowOpen = false
+            updateFrameRateForWindow(open: false)
             DispatchQueue.main.async { self.isCameraActive = false }
+        }
+    }
+
+    // MARK: - Sensor frame rate (Battery Saver)
+
+    /// Sensor frame rate between capture windows when Battery Saver is on. The
+    /// preview gets choppier, which is the trade the user opted into; inside a
+    /// window the sensor returns to full rate so apex timing is unaffected.
+    private static let batterySaverIdleFPS: Double = 10
+
+    /// The only real power lever this engine has: the session must keep running
+    /// for the preview, but the sensor does not have to run at 30 fps while we
+    /// are not going to infer anything. Called on `captureQueue`.
+    private func updateFrameRateForWindow(open: Bool) {
+        // Off: leave the device at its default (full) rate. If Battery Saver was
+        // just switched off while throttled, the next window open restores it.
+        guard isBatterySaverEnabled else { return }
+        applyFrameRate(open ? nil : Self.batterySaverIdleFPS)
+    }
+
+    /// Sets the sensor frame rate, or restores the active format's maximum when
+    /// `fps` is nil. Called on `captureQueue`. Any failure leaves the rate
+    /// unchanged — this is an optimisation, never a correctness requirement.
+    private func applyFrameRate(_ fps: Double?) {
+        guard let device = captureSession.inputs
+                .compactMap({ ($0 as? AVCaptureDeviceInput)?.device })
+                .first else { return }
+        let ranges = device.activeFormat.videoSupportedFrameRateRanges
+        guard let maxSupported = ranges.map(\.maxFrameRate).max() else { return }
+        let target = fps ?? maxSupported
+        guard ranges.contains(where: { $0.minFrameRate <= target && target <= $0.maxFrameRate }) else { return }
+        let duration = CMTime(value: 1, timescale: CMTimeScale(target.rounded()))
+        do {
+            try device.lockForConfiguration()
+            device.activeVideoMinFrameDuration = duration
+            device.activeVideoMaxFrameDuration = duration
+            device.unlockForConfiguration()
+        } catch {
+            // Keep the current rate.
         }
     }
 
@@ -356,21 +513,16 @@ final class CaptureEngine: NSObject, ObservableObject {
         return true
     }
 
-    /// Polls device motion at 100 Hz for apogee zero-crossing and rotation rate detection.
+    /// Polls device motion at 100 Hz for stride-apex and rotation-rate detection.
     ///
-    /// Apogee is detected on the SIGNED vertical acceleration — `userAcceleration`
-    /// projected onto the gravity direction:
-    ///   - Positive while accelerating upward (push-off phase of stride)
-    ///   - Negative while accelerating downward (falling toward the ground)
-    ///   - Crosses zero (positive → negative) at the stride apex — the optimal
-    ///     capture moment. A plain magnitude can never go negative, so it cannot
-    ///     express this crossing; the signed projection can.
+    /// `down` = userAcceleration · gravity (positive = accelerating toward the
+    /// earth). The stride apex is a local MAXIMUM of `down` — see `ApexDetector`
+    /// for why a zero-crossing is the wrong event. The unsigned magnitude of
+    /// `userAcceleration` still drives the stillness test and telemetry.
     ///
-    /// The unsigned magnitude of `userAcceleration` is still used for the
-    /// stillness test and the recorded `netAcceleration` telemetry field.
-    ///
-    /// Rotation rate is used as a gate: if the device is rotating too fast,
-    /// captures are suppressed to avoid motion blur.
+    /// The rotation-rate check here is only a cheap pre-filter on the latch; the
+    /// gate that actually rejects blurry frames runs at capture time in
+    /// `captureOutput`, against the rotation rate at that instant.
     private func startMotionUpdates() {
         guard motionManager.isDeviceMotionAvailable else {
             // No motion sensors (simulator) — keep inference window always open.
@@ -384,35 +536,28 @@ final class CaptureEngine: NSObject, ObservableObject {
             // Forward every IMU sample to the recorder (no-op when not recording)
             DataRecorder.shared.appendIMUSample(motion)
 
-            // Gravity-subtracted user acceleration.
             let ua = motion.userAcceleration
-            // Unsigned motion intensity — used for stillness + telemetry.
+            // Unsigned motion intensity — stillness test + telemetry.
             let netAccel = sqrt(ua.x * ua.x + ua.y * ua.y + ua.z * ua.z)
-            // Signed vertical component: project user acceleration onto the
-            // (unit-length) gravity vector. Positive = accelerating upward,
-            // negative = downward; crosses zero at the stride apex.
+            // Signed downward component. CoreMotion's gravity vector points toward
+            // the earth, so a positive dot product means accelerating downward.
             let g = motion.gravity
-            let vertical = ua.x * g.x + ua.y * g.y + ua.z * g.z
+            let down = ua.x * g.x + ua.y * g.y + ua.z * g.z
 
-            // Rotation rate magnitude (rad/s)
             let rr = motion.rotationRate
             let rotRate = sqrt(rr.x * rr.x + rr.y * rr.y + rr.z * rr.z)
             self.currentRotRate = rotRate
-
             let rotationTooFast = rotRate > self.rotationRateThreshold
 
-            // Apogee: signed zero-crossing from positive (pushing up) to negative
-            // (falling). Require the positive side to exceed a noise floor so
-            // sensor jitter while stationary isn't counted as an apogee.
-            let noiseFloor = 0.03
-            let isApogee = self.previousVertical >= noiseFloor && vertical < noiseFloor
-
-            // Near-stillness: phone barely moving (on a table, held very steady).
+            let isApex: Bool = {
+                self.motionLock.lock(); defer { self.motionLock.unlock() }
+                return self._apexDetector.feed(down: down, at: motion.timestamp)
+            }()
             let isStill = netAccel < self.stillnessThreshold
 
-            // Only trigger if rotation rate is below threshold
+            // Latch a capture trigger. The capture-time gate makes the final call.
             if !rotationTooFast {
-                if isApogee {
+                if isApex {
                     self.apogeeDetected = true
                     self.lastMotionTrigger = .apogee
                     DispatchQueue.main.async { self.apogeeCount += 1 }
@@ -431,63 +576,70 @@ final class CaptureEngine: NSObject, ObservableObject {
             }
 
             self.previousNetAccel = netAccel
-            self.previousVertical = vertical
         }
     }
 
-    /// Runs at 20 Hz to check for apogee events and manage camera power.
-    /// This is deliberately on the main run loop (lightweight — just checks a bool).
+    /// Runs the duty cycle at 20 Hz on `captureQueue` via a DispatchSourceTimer.
+    ///
+    /// Deliberately NOT a run-loop `Timer`: those fire only in `.default` mode, so
+    /// they stall for as long as the user is scrolling any list (the run loop sits
+    /// in `.tracking`) — which silently halted capture on the very debug screens
+    /// used to inspect it. A dispatch timer on our own queue has no such
+    /// dependency and cannot be delayed by main-thread work.
     private func startDutyCycleTimer() {
-        dutyCycleTimer?.invalidate()
-        dutyCycleTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
+        dutyCycleTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: captureQueue)
+        timer.schedule(deadline: .now() + 0.05, repeating: 0.05, leeway: .milliseconds(5))
+        timer.setEventHandler { [weak self] in
             guard let self, self.isRunning else { return }
-            self.captureQueue.async {
-                self.manageDutyCycle()
-            }
+            self.manageDutyCycle()
         }
+        timer.resume()
+        dutyCycleTimer = timer
     }
 
     /// Core duty cycle logic. Called on `captureQueue`.
     private func manageDutyCycle() {
         let now = Date()
-        let timeSinceLastCapture = now.timeIntervalSince(lastCaptureTime)
         let cooldown = isBatterySaverEnabled ? batterySaverInterval : minCaptureInterval
 
-        if isInferenceWindowOpen {
-            // Inference window is open — check if it should close.
-            let windowDuration = now.timeIntervalSince(captureWindowOpenedAt)
-            if windowDuration >= maxCaptureWindowDuration {
-                // Window expired without capturing — close and try again next cycle.
-                setInferenceWindow(open: false)
-            }
-        } else {
-            // Inference window is closed — should we open it?
-            guard timeSinceLastCapture >= cooldown else { return }
-            guard !isProcessingFrame else { return }
+        let decision = DutyCycle.decide(DutyCycle.Input(
+            windowOpen: isInferenceWindowOpen,
+            windowAge: now.timeIntervalSince(captureWindowOpenedAt),
+            maxWindow: maxCaptureWindowDuration,
+            timeSinceCapture: now.timeIntervalSince(lastCaptureTime),
+            cooldown: cooldown,
+            forcedInterval: forcedCaptureInterval,
+            apexLatched: apogeeDetected,
+            latchedTrigger: lastMotionTrigger,
+            processing: isProcessingFrame
+        ))
 
-            if apogeeDetected {
-                lastTrigger = lastMotionTrigger
-                apogeeDetected = false
-                setInferenceWindow(open: true)
-            } else if timeSinceLastCapture >= forcedCaptureInterval {
-                lastTrigger = .forced
-                setInferenceWindow(open: true)
-            }
+        if decision.consumeLatch { apogeeDetected = false }
+
+        switch decision.action {
+        case .none:
+            break
+        case .closeWindow:
+            setInferenceWindow(open: false)
+        case .openWindow(let trigger):
+            lastTrigger = trigger
+            setInferenceWindow(open: true)
         }
     }
 
     private func startDiagnosticsTimer() {
-        diagnosticsTimer?.invalidate()
-        diagnosticsTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: true) { [weak self] _ in
+        diagnosticsTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: captureQueue)
+        timer.schedule(deadline: .now() + 60, repeating: 60)
+        timer.setEventHandler { [weak self] in
             guard let self else { return }
-            self.captureQueue.async {
-                let count = self.frameCountInWindow
-                self.frameCountInWindow = 0
-                DispatchQueue.main.async {
-                    self.capturesPerMinute = count
-                }
-            }
+            let count = self.frameCountInWindow
+            self.frameCountInWindow = 0
+            DispatchQueue.main.async { self.capturesPerMinute = count }
         }
+        timer.resume()
+        diagnosticsTimer = timer
     }
 
     // MARK: - Session Interruption Handling
@@ -567,6 +719,15 @@ extension CaptureEngine: AVCaptureVideoDataOutputSampleBufferDelegate {
         // Only forward frames for inference when the duty cycle window is open.
         guard isInferenceWindowOpen else { return }
         guard !isProcessingFrame else { return }
+
+        // Quality gate at the instant of capture. The latch-time rotation check
+        // can be stale by the time a frame arrives, so re-check now and, if the
+        // phone is turning fast enough to smear the frame, skip it and wait for
+        // the next one in this window. Forced windows are exempt: they exist to
+        // guarantee liveness, so continuous panning cannot starve detection.
+        if lastTrigger != .forced && currentRotRate > rotationRateThreshold {
+            return
+        }
 
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 

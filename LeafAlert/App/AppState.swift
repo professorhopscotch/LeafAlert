@@ -148,7 +148,7 @@ final class AppState: ObservableObject {
     /// on the left and steer right while the plant is actually behind them. Captures
     /// run at roughly 1 Hz, so a couple of seconds keeps the box present between
     /// consecutive detections while still expiring a stale one.
-    static let detectionBoxLifetime: TimeInterval = 2.5
+    nonisolated static let detectionBoxLifetime: TimeInterval = 2.5
 
     private var detectionExpiryTask: Task<Void, Never>?
 
