@@ -77,6 +77,25 @@ The alert threshold and per-class logic live in
 
 Re-derive these after every retrain; they are model-specific.
 
+## Robustness (v8, held-out n=362, `robustness_report.py`)
+
+Perturbations applied to the full-resolution image before the parity resize;
+the load-bearing signal is the delta from clean. Alert bar here is the script's
+summed-toxic-probability ≥ 0.5, not the app's per-class thresholds.
+
+| Perturbation | Accuracy | Toxic recall (argmax) | Toxic→safe (dangerous) | No alert fires |
+|---|---|---|---|---|
+| clean | 74.0% | 92.0% | 8.0% | 5.7% |
+| contrast ×0.55 | 73.2% | 91.6% | 8.4% | 6.5% |
+| occlusion 30% | 68.0% | 90.1% | 9.9% | 6.5% |
+| motion blur k=15 | 66.9% | 91.6% | 8.4% | 5.7% |
+| brightness ×1.6 | 72.1% | 92.4% | 7.6% | 5.3% |
+| rotation 20° | 72.1% | 92.4% | 7.6% | 5.3% |
+
+The dangerous toxic→safe rate moves by at most +1.9 pp (occlusion) under any
+single perturbation; the accuracy losses under blur and occlusion come mostly
+from toxic↔toxic confusions, which the app still surfaces as toxic.
+
 ## Calibration (measured on v8, held-out n=362)
 
 `scripts/calibration_report.py` (now loads v5-recipe checkpoints of any backbone;
@@ -102,8 +121,10 @@ before anything else.
 .venv/bin/python scripts/evaluate_model.py --checkpoint checkpoints/student_v8_gbif.pth --arch v5 \
     --coreml LeafAlert/Resources/MLModels/PlantDetector.mlpackage --data TrainingData/Testing --split held-out
 
-.venv/bin/python scripts/calibration_report.py   # ECE, reliability, temperature, threshold sweep
-.venv/bin/python scripts/robustness_report.py    # perturbation degradation (blur/occlusion/…)
+# Always pass --checkpoint: both scripts default to the OLD distilled model.
+.venv/bin/python scripts/calibration_report.py --checkpoint checkpoints/student_v8_gbif.pth   # ECE, reliability, temperature
+.venv/bin/python scripts/robustness_report.py  --checkpoint checkpoints/student_v8_gbif.pth --data-dir TrainingData/Testing
+.venv/bin/python scripts/operating_point.py    --checkpoint checkpoints/student_v8_gbif.pth --blur 15   # the app's decision (headline numbers)
 .venv/bin/python scripts/audit_dataset.py        # counts, dupes, leakage, resolution
 ```
 
