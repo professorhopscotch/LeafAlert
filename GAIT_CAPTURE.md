@@ -32,16 +32,18 @@ unit test (`testVerticalDownIsPositiveInFreeFall`) pins the convention.
   used to fire on the zero-crossings of a slow walk and open the window at an
   arbitrary phase. An apex latch is never relabelled as stillness.
 - **`DutyCycle.decide`** — pure decision at 20 Hz: honour cooldown, consume stale
-  latches, open on a latched apex/stillness, else force a capture every
-  `forcedCaptureInterval` so a phone held very steadily still sees the world.
+  latches, open on a latched apex or sustained stillness (a phone held still
+  is the stillness path), and as a last resort force a capture every
+  `forcedCaptureInterval` so the world is still seen if neither fires.
 - **Capture-time gate** — a frame is dropped if the rotation rate is above
   `rotationRateThreshold` (forced captures are exempt).
 - **Battery Saver** — the sensor drops to 10 fps while no window is open and is
   restored to its exact saved rate on the next window, even if the setting was
   switched off in between.
 
-Tunables live in `TuningDefaults` and can be changed live from Debug → Live
-Controls.
+The engine's intervals and thresholds default from `TuningDefaults` and can be
+changed live from Debug → Live Controls. `ApexDetector`'s peak floor,
+refractory and smoothing are compile-time constants.
 
 ## Field check (30–60 seconds)
 

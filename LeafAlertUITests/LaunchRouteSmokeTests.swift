@@ -19,9 +19,21 @@ final class LaunchRouteSmokeTests: XCTestCase {
         var args = extra
         if let route { args += ["-launchRoute", route] }
         app.launchArguments = args
+        // A fresh simulator (CI) shows the camera / location permission alerts
+        // on the first patrol; accept them so no test depends on test order.
+        addUIInterruptionMonitor(withDescription: "System permission alert") { alert in
+            for title in ["Allow", "Allow While Using App", "OK"] where alert.buttons[title].exists {
+                alert.buttons[title].tap()
+                return true
+            }
+            return false
+        }
         app.launch()
         let understand = app.buttons["I Understand"]
         if understand.waitForExistence(timeout: 3) { understand.tap() }
+        // Interruption monitors only run on the next interaction; a tap on the
+        // status-bar area is harmless.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.01)).tap()
         return app
     }
 
@@ -87,6 +99,25 @@ final class LaunchRouteSmokeTests: XCTestCase {
         let app = launch(route: "patrol", extra: ["-autoStartPatrol", "1", "-injectDetection", "poison_ivy:0.30"])
         let headline = app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] %@", "Possible Poison Ivy")).firstMatch
         XCTAssertTrue(headline.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] %@", "verify visually")).firstMatch.exists)
+        // The card's footer always says "verify visually"; assert the SUBTITLE the
+        // uncertain severity produces, so this cannot pass by accident.
+        XCTAssertTrue(app.staticTexts["Low confidence · verify visually before touching"].exists)
+    }
+
+    func testMapRouteShowsTheDetectionMap() {
+        let app = launch(route: "map")
+        XCTAssertTrue(app.navigationBars["Detection Map"].waitForExistence(timeout: 10))
+    }
+
+    func testInjectedDetectionPersistsIntoRecentDetectionsAcrossRelaunch() {
+        // Inject on patrol, then relaunch cold onto Home: the detection log store
+        // must have persisted it and Home must list it.
+        let first = launch(route: "patrol", extra: ["-autoStartPatrol", "1", "-injectDetection", "poison_sumac:0.80"])
+        XCTAssertTrue(first.buttons["Correct"].waitForExistence(timeout: 10))
+        first.terminate()
+        let app = launch()
+        XCTAssertTrue(app.staticTexts["Recent Detections"].waitForExistence(timeout: 10))
+        let row = app.staticTexts.containing(NSPredicate(format: "label CONTAINS[c] %@", "Poison Sumac")).firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5), "the injected detection was not persisted to the log / Home list")
     }
 }

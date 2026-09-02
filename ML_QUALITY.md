@@ -79,7 +79,14 @@ Re-derive these after every retrain; they are model-specific.
 
 ## Calibration (measured on v8, held-out n=362)
 
-`scripts/calibration_report.py` (now loads v5-recipe checkpoints of any backbone):
+`scripts/calibration_report.py` (now loads v5-recipe checkpoints of any backbone;
+its `--checkpoint` default is the OLD distilled model, so always pass the one you
+mean):
+
+```bash
+.venv/bin/python scripts/calibration_report.py --checkpoint checkpoints/student_v8_gbif.pth
+```
+
 ECE 0.050, MCE 0.097, mean confidence − accuracy = +1.3 pp (very mildly
 over-confident). A single-temperature fit barely moves anything (NLL 0.6853 →
 0.6851, ECE 0.050 → 0.049), so **temperature scaling is not worth shipping**:

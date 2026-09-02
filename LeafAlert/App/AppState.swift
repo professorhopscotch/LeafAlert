@@ -152,7 +152,9 @@ final class AppState: ObservableObject {
     #if DEBUG
     /// Test hook: pushes a synthetic detection through the exact live path
     /// (alerts, card, box, log) so the detection UX can be exercised and
-    /// UI-tested where there is no camera. `-injectDetection poison_ivy:0.72`.
+    /// UI-tested where there is no camera. Launch with `-injectDetection
+    /// poison_ivy:0.72` together with `-autoStartPatrol 1` — handleDetection
+    /// ignores detections while no patrol is running.
     func injectDebugDetection(plantType: String, confidence: Float) {
         let result = DetectionResult(
             plantType: plantType,

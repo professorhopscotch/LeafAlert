@@ -69,7 +69,7 @@ struct SettingsView: View {
 
             Section("Battery") {
                 Toggle("Battery Saver Mode", isOn: $batterySaverEnabled)
-                Text("Captures at most once every \(Int(CaptureEngine.TuningDefaults.batterySaverInterval)) seconds instead of every \(Int(CaptureEngine.TuningDefaults.minCaptureInterval)), and idles the camera sensor between captures.")
+                Text("Captures at most once every \(Int(CaptureEngine.TuningDefaults.batterySaverInterval)) seconds instead of every \(Int(CaptureEngine.TuningDefaults.minCaptureInterval)), and drops the camera sensor to 10 fps between captures.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

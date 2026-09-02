@@ -569,8 +569,10 @@ final class CaptureEngine: NSObject, ObservableObject {
     /// are not going to infer anything. Called on `captureQueue`.
     private func updateFrameRateForWindow(open: Bool) {
         if open {
-            if isThrottled {
-                restoreFrameRate()
+            // Stay "throttled" until the restore actually succeeds: clearing the
+            // flag after a failed restore made the next throttle save the 10 fps
+            // durations as the baseline and pinned the sensor there for good.
+            if isThrottled, restoreFrameRate() {
                 isThrottled = false
             }
         } else if isBatterySaverEnabled && !isThrottled {
@@ -590,8 +592,11 @@ final class CaptureEngine: NSObject, ObservableObject {
         do {
             try device.lockForConfiguration()
             defer { device.unlockForConfiguration() }
-            savedMinFrameDuration = device.activeVideoMinFrameDuration
-            savedMaxFrameDuration = device.activeVideoMaxFrameDuration
+            // The baseline is sampled once and kept until a restore succeeds.
+            if !savedMinFrameDuration.isValid || !savedMaxFrameDuration.isValid {
+                savedMinFrameDuration = device.activeVideoMinFrameDuration
+                savedMaxFrameDuration = device.activeVideoMaxFrameDuration
+            }
             let duration = CMTime(value: 1, timescale: CMTimeScale(fps.rounded()))
             device.activeVideoMinFrameDuration = duration
             device.activeVideoMaxFrameDuration = duration
@@ -601,16 +606,20 @@ final class CaptureEngine: NSObject, ObservableObject {
         }
     }
 
-    private func restoreFrameRate() {
+    /// Returns true only if the saved baseline was put back on the device.
+    private func restoreFrameRate() -> Bool {
         guard let device = captureDevice,
-              savedMinFrameDuration.isValid, savedMaxFrameDuration.isValid else { return }
+              savedMinFrameDuration.isValid, savedMaxFrameDuration.isValid else { return false }
         do {
             try device.lockForConfiguration()
             defer { device.unlockForConfiguration() }
             device.activeVideoMinFrameDuration = savedMinFrameDuration
             device.activeVideoMaxFrameDuration = savedMaxFrameDuration
+            savedMinFrameDuration = .invalid
+            savedMaxFrameDuration = .invalid
+            return true
         } catch {
-            // Keep the current rate.
+            return false   // keep the flag and the baseline; retry on the next window
         }
     }
 

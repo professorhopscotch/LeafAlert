@@ -204,6 +204,13 @@ struct PatrolView: View {
         }
         .navigationTitle("Patrol")
         .navigationBarTitleDisplayMode(.inline)
+        // The correction picker belongs to ONE detection. If a newer detection
+        // replaces the card (or it expires) while the picker is open, a Submit
+        // would file the correction against the wrong detection.
+        .onChange(of: appState.lastDetection?.id) { _, _ in
+            showingCorrection = false
+            selectedCorrection = nil
+        }
         .sheet(isPresented: $showAROverlay, onDismiss: {
             // Resume the capture session after AR releases the camera.
             if appState.isPatrolling {
