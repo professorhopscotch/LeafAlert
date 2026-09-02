@@ -446,3 +446,15 @@ Retraining more often than the pool grows is wasted compute — a 40-epoch run o
 | `scripts/ood_report.py` | Non-plant false-alert rate |
 | `DATA_PIPELINE.md` | Bulk data-expansion runbook (fetch → QA → retrain) |
 | `ML_QUALITY.md` | Model quality charter + baseline numbers |
+
+## The feedback card (fixed 2026-09-02)
+
+The loop only works if people can answer the card. Since c28ec68 the card
+disappeared 2.5 s after the last actionable detection — it was bound to the
+same property as the bounding box, which is expired quickly on purpose — so in
+practice *Correct* / *Wrong* was almost never tappable. The card now stays for
+`AppState.detectionCardLifetime` (20 s) or until answered or dismissed; only the
+box expires after 2.5 s. `-injectDetection poison_ivy:0.72` (DEBUG, with
+`-autoStartPatrol 1`) pushes a synthetic detection through the live path so the
+card and the correction flow can be exercised in the simulator; three XCUITests
+cover it.

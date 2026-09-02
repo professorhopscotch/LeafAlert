@@ -385,3 +385,14 @@ baseline numbers so the next iteration's "never regress" gate has a reference.
   re-exported `.mlpackage`.
 - If acceptance fails, the prior `.mlpackage` in git history is the rollback
   target — do not overwrite it in a commit until the new model passes the gate.
+
+## Oversized originals (added 2026-09-02)
+
+`dataset_qa.py` no longer admits huge originals verbatim. Anything above
+`--max-megapixels` (default 20) is **downsized on commit** to a long edge of
+`--downsize-long-edge` px (default 2048; EXIF orientation baked in, JPEG q95)
+and the manifest records `downsized_to_long_edge`. Nothing is dropped for
+size. Motivation: a 101.8 MP and a 43 MP GBIF scan were in the pool, decoded in
+full on every epoch for a 224-px input. Those two existing pool files were left
+untouched (the pool is not mutated mid-experiment); re-commit them through QA
+if you want them downsized.
