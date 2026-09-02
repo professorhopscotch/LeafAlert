@@ -327,6 +327,18 @@ final class CaptureEngine: NSObject, ObservableObject {
 
     private let captureSession = AVCaptureSession()
     private let motionManager = CMMotionManager()
+
+    /// Serial delivery queue for CoreMotion. A bare `OperationQueue()` is
+    /// CONCURRENT, so under load consecutive samples could be handled out of
+    /// order and the apex detector (a sequential peak finder) would see a
+    /// scrambled series. One lane, high QoS, so timing stays faithful.
+    private let motionQueue: OperationQueue = {
+        let q = OperationQueue()
+        q.name = "com.leafalert.motion"
+        q.maxConcurrentOperationCount = 1
+        q.qualityOfService = .userInteractive
+        return q
+    }()
     private let captureQueue = DispatchQueue(label: "com.leafalert.capture", qos: .userInitiated)
     private var lastCaptureTime: Date = .distantPast
     private var videoOutput: AVCaptureVideoDataOutput?
@@ -645,7 +657,7 @@ final class CaptureEngine: NSObject, ObservableObject {
             return
         }
         motionManager.deviceMotionUpdateInterval = 0.01  // 100 Hz
-        motionManager.startDeviceMotionUpdates(to: .init()) { [weak self] motion, _ in
+        motionManager.startDeviceMotionUpdates(to: motionQueue) { [weak self] motion, _ in
             guard let self, let motion else { return }
 
             // Forward every IMU sample to the recorder (no-op when not recording)
