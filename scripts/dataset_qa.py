@@ -254,7 +254,7 @@ def leak_match(rec, ref, leak_hamming):
 # ─────────────────────────────────────────────────────────────────────────────
 # Staged scan + quality filters
 # ─────────────────────────────────────────────────────────────────────────────
-def scan_staged(class_dirs, min_side, min_aspect, max_aspect, sat_thresh):
+def scan_staged(class_dirs, min_side, min_aspect, max_aspect, sat_thresh, max_pixels=None):
     """
     Load every staged image, run quality filters, compute hashes.
     Returns a list of per-file records. A record that fails a quality filter
@@ -277,6 +277,10 @@ def scan_staged(class_dirs, min_side, min_aspect, max_aspect, sat_thresh):
 
             w, h = im.size
             rec["w"], rec["h"] = w, h
+            # Oversized originals (a 100 MP GBIF scan turned up in the pool) are
+            # not dropped — they are downsized on commit. Decoding them every
+            # epoch costs seconds and warns as a decompression bomb.
+            rec["oversized"] = bool(max_pixels and w * h > max_pixels)
             side = min(w, h)
             aspect = (w / h) if h else 0.0
             rec["aspect"] = round(aspect, 3)
@@ -500,7 +504,21 @@ def next_start_index(dest_dir, tag):
     return mx + 1
 
 
-def commit_survivors(survivors, pool_root, tag, staging_prov, dry_run):
+def downsize_copy(src: Path, dest: Path, long_edge: int):
+    """Write `src` to `dest` with its long edge capped at `long_edge` px.
+    EXIF orientation is baked in first (thumbnails lose the tag); JPEG at
+    quality 95, PNG kept as PNG."""
+    from PIL import ImageOps
+    with Image.open(src) as im:
+        im = ImageOps.exif_transpose(im)
+        im.thumbnail((long_edge, long_edge), Image.LANCZOS)
+        if dest.suffix.lower() == ".png":
+            im.save(dest, format="PNG", optimize=True)
+        else:
+            im.convert("RGB").save(dest, format="JPEG", quality=95, optimize=True)
+
+
+def commit_survivors(survivors, pool_root, tag, staging_prov, dry_run, downsize_long_edge=None):
     """
     Copy each survivor into  pool_root/<cls>/  with a source-tagged filename.
     NEVER writes into a 'Testing' dir. Returns a list of manifest entries.
@@ -531,6 +549,7 @@ def commit_survivors(survivors, pool_root, tag, staging_prov, dry_run):
             "class": cls,
             "width": r.get("w"),
             "height": r.get("h"),
+            "downsized_to_long_edge": downsize_long_edge if (r.get("oversized") and downsize_long_edge) else None,
             "sha256_pixels": r.get("sha"),
             "source": prov.get("source"),
             "license": prov.get("license"),
@@ -547,7 +566,10 @@ def commit_survivors(survivors, pool_root, tag, staging_prov, dry_run):
             if dest.exists():
                 # Extremely unlikely given seeding, but never clobber.
                 raise FileExistsError(f"Refusing to overwrite existing file: {dest}")
-            shutil.copy2(src, dest)
+            if r.get("oversized") and downsize_long_edge:
+                downsize_copy(src, dest, downsize_long_edge)
+            else:
+                shutil.copy2(src, dest)
     return manifest_entries
 
 
@@ -671,6 +693,10 @@ def main():
                     help="Source tag for committed filenames (default: staging dir name).")
 
     # Quality thresholds
+    ap.add_argument("--max-megapixels", type=float, default=20.0,
+                    help="Originals above this are downsized on commit (not dropped).")
+    ap.add_argument("--downsize-long-edge", type=int, default=2048,
+                    help="Long-edge cap applied to oversized originals on commit.")
     ap.add_argument("--min-side", type=int, default=128,
                     help="Minimum length (px) of the shorter image side.")
     ap.add_argument("--min-aspect", type=float, default=0.4,
@@ -743,7 +769,8 @@ def main():
 
     print("Scanning staged images (quality filters + hashing)...")
     records = scan_staged(class_dirs, args.min_side, args.min_aspect,
-                          args.max_aspect, args.sat_thresh)
+                          args.max_aspect, args.sat_thresh,
+                          max_pixels=int(args.max_megapixels * 1e6))
 
     # LEAKAGE GUARD: applied to every image that passed the quality gate.
     for r in records:
@@ -781,7 +808,8 @@ def main():
         if len(survivors) > 5:
             print(f"    ... and {len(survivors) - 5} more")
     else:
-        entries = commit_survivors(survivors, pool_root, tag, staging_prov, dry_run=False)
+        entries = commit_survivors(survivors, pool_root, tag, staging_prov, dry_run=False,
+                                       downsize_long_edge=args.downsize_long_edge)
         manifest = {
             "tool": "dataset_qa.py",
             "created": time.strftime("%Y-%m-%dT%H:%M:%S"),
