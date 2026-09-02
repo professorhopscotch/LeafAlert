@@ -387,6 +387,15 @@ baseline numbers so the next iteration's "never regress" gate has a reference.
 - If acceptance fails, the prior `.mlpackage` in git history is the rollback
   target — do not overwrite it in a commit until the new model passes the gate.
 
+## Top-up log
+
+- **2026-09-02 — GBIF ivy/oak top-up.** `fetch_gbif.py --classes poison_ivy poison_oak --limit 400` and
+  `--classes safe_plants --limit 200` (US, CC0/CC-BY only). QA: 804 kept (ivy 399, oak 400,
+  safe 5, sumac 0 — the sumac and safe queries were exhausted), 0 held-out leaks, the
+  1,909 previously committed GBIF files re-matched the pool as `leak_pool` and were skipped.
+  Pool after: ivy 3,277 · oak 2,796 · sumac 1,291 · safe 2,831 (10,195). Used for the
+  v9-data experiment (see ML_QUALITY.md).
+
 ## Oversized originals (added 2026-09-02)
 
 `dataset_qa.py` no longer admits huge originals verbatim. Anything above
