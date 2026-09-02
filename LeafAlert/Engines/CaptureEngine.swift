@@ -809,7 +809,9 @@ final class CaptureEngine: NSObject, ObservableObject {
     @objc private func sessionRuntimeError(_ notification: Notification) {
         // Only restart a session that actually has a camera input. Restarting an
         // input-less session just posts another runtime error — a tight loop that
-        // burned CPU on hosts with no camera.
+        // burned CPU on hosts with no camera, and whose notification traffic
+        // surfaced as periodic "Publishing changes from within view updates"
+        // runtime issues (36 per launch with the loop; zero without it).
         guard isConfigured else {
             print("[CaptureEngine] Runtime error on an unconfigured session — not restarting")
             return
