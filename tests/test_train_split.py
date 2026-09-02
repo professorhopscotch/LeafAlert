@@ -9,6 +9,10 @@ the model onto the starved class.
 Run: .venv/bin/python -m pytest tests/test_train_split.py
 """
 
+import pytest
+pytest.importorskip("torch")  # heavy ML dep: skipped in the light CI job
+pytest.importorskip("timm")  # heavy ML dep: skipped in the light CI job
+
 import sys
 from collections import Counter
 from pathlib import Path

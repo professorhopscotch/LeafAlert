@@ -1,5 +1,9 @@
 """operating_point.py must mirror ToxicityThresholds exactly, and read the
 thresholds from the Swift source rather than a copy that can drift."""
+import pytest
+pytest.importorskip("torch")  # heavy ML dep: skipped in the light CI job
+pytest.importorskip("timm")  # heavy ML dep: skipped in the light CI job
+
 import sys
 from pathlib import Path
 

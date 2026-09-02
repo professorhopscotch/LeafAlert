@@ -10,6 +10,10 @@ Run with:
     .venv/bin/python -m pytest tests/test_preprocessing_parity.py
 """
 
+import pytest
+pytest.importorskip("torch")  # heavy ML dep: skipped in the light CI job
+pytest.importorskip("coremltools")  # heavy ML dep: skipped in the light CI job
+
 import sys
 from pathlib import Path
 
