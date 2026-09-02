@@ -77,6 +77,17 @@ The alert threshold and per-class logic live in
 
 Re-derive these after every retrain; they are model-specific.
 
+## Calibration (measured on v8, held-out n=362)
+
+`scripts/calibration_report.py` (now loads v5-recipe checkpoints of any backbone):
+ECE 0.050, MCE 0.097, mean confidence − accuracy = +1.3 pp (very mildly
+over-confident). A single-temperature fit barely moves anything (NLL 0.6853 →
+0.6851, ECE 0.050 → 0.049), so **temperature scaling is not worth shipping**:
+the baked softmax is already a usable probability, which is what makes the
+per-class `ToxicityThresholds` and the sensitivity slider meaningful. Re-run
+after every retrain; if ECE climbs above ~0.10 the thresholds need re-deriving
+before anything else.
+
 ## Evaluation tooling (durable)
 
 ```sh
