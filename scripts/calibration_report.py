@@ -79,12 +79,16 @@ def get_device():
     return torch.device("cpu")
 
 
-def load_model(checkpoint: Path, device) -> PlantDetectorNet:
-    model = PlantDetectorNet(len(CLASS_ORDER))
-    sd = torch.load(str(checkpoint), map_location="cpu", weights_only=True)
-    model.load_state_dict(sd)
-    model.eval().to(device)
-    return model
+def load_model(checkpoint: Path, device, arch: str = "auto"):
+    """Loads either the old distilled PlantDetectorNet or a v5-recipe checkpoint
+    (any backbone). evaluate_model.build_torch_model auto-detects the
+    architecture from the state_dict keys and, for v5, rebuilds the recorded
+    backbone/head — this script used to hard-code PlantDetectorNet and could not
+    report calibration for the shipped v5+ models at all."""
+    from evaluate_model import build_torch_model
+    model, resolved = build_torch_model(checkpoint, arch)
+    print(f"  torch architecture: {resolved}")
+    return model.eval().to(device)
 
 
 def collect_logits(model, data_dir: Path, device, batch_size: int = 64):
@@ -402,6 +406,8 @@ def parse_args():
                    default="toxic_score",
                    help="toxic_score: alert iff max-toxic-prob>=t; "
                         "argmax: alert iff argmax is toxic and its prob>=t")
+    p.add_argument("--arch", choices=["auto", "distilled", "v5"], default="auto",
+                   help="Checkpoint architecture; auto-detected from the keys.")
     p.add_argument("--batch-size", type=int, default=64)
     p.add_argument("--json", type=Path, default=None,
                    help="Optional path to write full metrics as JSON")
@@ -415,7 +421,7 @@ def main():
     print(f"Device: {device}")
     print(f"Checkpoint: {args.checkpoint}")
     print(f"Data dir:   {args.data_dir}")
-    model = load_model(args.checkpoint, device)
+    model = load_model(args.checkpoint, device, args.arch)
     logits, labels, class_names = collect_logits(
         model, args.data_dir, device, args.batch_size)
     report = print_report(logits, labels, class_names, args.bins,
