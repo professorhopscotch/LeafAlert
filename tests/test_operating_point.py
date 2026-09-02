@@ -21,18 +21,22 @@ def test_thresholds_are_parsed_from_the_swift_source():
 
 
 def _probs(rows):
-    p = np.zeros((len(rows), len(CLASS_LABELS)), dtype=np.float32)
+    """Rows of (top1_index, its probability); the remainder is spread evenly
+    over the other classes, so `val` stays top-1 whenever val > 0.25."""
+    n = len(CLASS_LABELS)
+    p = np.zeros((len(rows), n), dtype=np.float32)
     for i, (idx, val) in enumerate(rows):
+        assert val > 0.25, "top-1 would not be top-1"
+        p[i, :] = (1 - val) / (n - 1)
         p[i, idx] = val
-        p[i, SAFE if idx != SAFE else IVY] = 1 - val   # runner-up gets the rest
     return p
 
 
 def test_decision_mirrors_toxicity_thresholds_severity():
     thr = {"baseAlert": {"poison_ivy": 0.40, "poison_oak": 0.40, "poison_sumac": 0.52},
            "defaultAlert": 0.5, "neutralSensitivity": 0.5, "uncertaintyMargin": 0.20}
-    probs = _probs([(IVY, 0.45), (IVY, 0.25), (IVY, 0.55), (SUMAC, 0.45), (SUMAC, 0.30), (SAFE, 0.9)])
-    # Note: 0.55 on ivy leaves 0.45 for safe, so ivy is still top-1.
+    # ivy: alert bar 0.40, band down to 0.20.  sumac: bar 0.52, band down to 0.32.
+    probs = _probs([(IVY, 0.45), (IVY, 0.30), (IVY, 0.55), (SUMAC, 0.45), (SUMAC, 0.30), (SAFE, 0.9)])
     sev = [s for _, s in op.decide(probs, thr)]
     assert sev == ["alert", "uncertain", "alert", "uncertain", "ignore", "safe"]
 
@@ -50,8 +54,8 @@ def test_metrics_count_the_dangerous_error_by_argmax_only():
     y = np.array([IVY, IVY, OAK, SUMAC, SAFE, SAFE])
     probs = _probs([(IVY, 0.45),   # alert
                     (SAFE, 0.6),   # toxic image, top-1 safe -> the dangerous miss
-                    (OAK, 0.25),   # uncertain (surfaced, not full alert)
-                    (SUMAC, 0.30), # ignore: toxic top-1 but below the band -> not surfaced, not a "safe" miss
+                    (OAK, 0.30),   # uncertain (surfaced, not full alert)
+                    (SUMAC, 0.30), # ignore: toxic top-1 but below sumac's band (0.32) -> not surfaced, not a "safe" miss
                     (IVY, 0.45),   # safe image -> false alarm (surfaced + full)
                     (SAFE, 0.8)])  # correct safe
     m = op.metrics(y, probs, thr)
