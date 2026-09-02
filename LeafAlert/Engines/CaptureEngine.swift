@@ -14,9 +14,12 @@ struct CaptureContext {
 
 /// Detects the stride APEX from the signed vertical acceleration stream.
 ///
-/// Let `down` = userAcceleration · gravity. CoreMotion's `gravity` points toward
-/// the earth, so `down` is positive while the phone accelerates DOWNWARD and
-/// negative while it accelerates upward.
+/// Let `down` = −(userAcceleration · gravity). CoreMotion's `gravity` points
+/// toward the earth, but `userAcceleration` is the accelerometer RESIDUAL, which
+/// is the NEGATIVE of kinematic acceleration: in free fall the accelerometer
+/// reads zero, so userAcceleration = −gravity while the phone accelerates
+/// downward at 1 g. Hence the negation — `down` is positive while the phone
+/// accelerates DOWNWARD. See `CaptureEngine.verticalDown`, pinned by a test.
 ///
 /// Over one walking bounce the body's vertical velocity is zero at the two
 /// turnarounds — the apex (top) and heel-strike (bottom) — and maximal in
@@ -68,6 +71,34 @@ struct ApexDetector {
     mutating func reset() {
         smoothed = 0; prev = 0; prevDelta = 0; lastFire = -.infinity; samples = 0
     }
+}
+
+/// Smooths |userAcceleration| so "still" means sustained quiet, not one sample.
+///
+/// During slow walking the vertical acceleration passes through zero twice per
+/// stride, so a single-sample test (|ua| < threshold) fired on those crossings
+/// and opened the window at an arbitrary gait phase — labelled "stillness". An
+/// EMA with a ~0.3 s time constant (weight 0.033 at 100 Hz) only drops below the
+/// threshold when the phone has actually been quiet for a while. It is seeded
+/// high so a moving start cannot be mistaken for still.
+struct StillnessFilter {
+    var smoothing: Double
+    private var ema: Double
+    private let seed: Double
+
+    init(smoothing: Double = 0.033, seed: Double = 1.0) {
+        self.smoothing = smoothing
+        self.seed = seed
+        self.ema = seed
+    }
+
+    /// Feed one |userAcceleration| sample; returns the smoothed magnitude.
+    mutating func feed(_ magnitude: Double) -> Double {
+        ema = smoothing * magnitude + (1 - smoothing) * ema
+        return ema
+    }
+
+    mutating func reset() { ema = seed }
 }
 
 /// The duty-cycle decision, factored out of the engine so it can be tested
@@ -156,6 +187,18 @@ final class CaptureEngine: NSObject, ObservableObject {
 
     /// Camera authorization state, for the UI to surface an "access needed" message.
     enum CameraPermission { case unknown, authorized, denied }
+
+    /// Downward kinematic acceleration in g, from a CoreMotion sample.
+    ///
+    /// CoreMotion's `userAcceleration` is the accelerometer residual — total
+    /// minus gravity — and an accelerometer measures PROPER acceleration, which is
+    /// the negative of kinematic acceleration along gravity: in free fall it reads
+    /// zero, so userAcceleration = −gravity while the phone accelerates downward
+    /// at 1 g. Projecting onto the (earthward, unit-length) gravity vector and
+    /// negating therefore yields "positive = accelerating toward the earth".
+    static func verticalDown(userAcceleration ua: CMAcceleration, gravity g: CMAcceleration) -> Double {
+        -(ua.x * g.x + ua.y * g.y + ua.z * g.z)
+    }
 
     // MARK: - Published State
 
@@ -303,6 +346,10 @@ final class CaptureEngine: NSObject, ObservableObject {
     /// `stop()` can reset it from another thread.
     private var _apexDetector = ApexDetector()
 
+    /// Smoothed |userAcceleration| for the stillness test (see StillnessFilter).
+    /// Motion queue only; guarded by motionLock alongside the apex detector.
+    private var _stillness = StillnessFilter()
+
     /// Current rotation rate magnitude, updated on the motion queue.
     /// Read by duty cycle via motionLock.
     private var _currentRotRate: Double = 0.0
@@ -438,7 +485,7 @@ final class CaptureEngine: NSObject, ObservableObject {
         // Drop any latch and detector history so the next patrol cannot open a
         // window on a stale apex from this one.
         apogeeDetected = false
-        motionLock.lock(); _apexDetector.reset(); motionLock.unlock()
+        motionLock.lock(); _apexDetector.reset(); _stillness.reset(); motionLock.unlock()
         removeSessionObservers()
 
         captureQueue.async { [weak self] in
@@ -480,33 +527,63 @@ final class CaptureEngine: NSObject, ObservableObject {
     /// window the sensor returns to full rate so apex timing is unaffected.
     private static let batterySaverIdleFPS: Double = 10
 
+    /// captureQueue-only. Whether WE lowered the sensor rate. Tracked explicitly
+    /// so the rate is always restored on the next window even if Battery Saver
+    /// was switched off in between — otherwise a throttled sensor stayed at
+    /// 10 fps for the life of the process.
+    private var isThrottled = false
+    private var savedMinFrameDuration = CMTime.invalid
+    private var savedMaxFrameDuration = CMTime.invalid
+
+    private var captureDevice: AVCaptureDevice? {
+        captureSession.inputs.compactMap { ($0 as? AVCaptureDeviceInput)?.device }.first
+    }
+
     /// The only real power lever this engine has: the session must keep running
     /// for the preview, but the sensor does not have to run at 30 fps while we
     /// are not going to infer anything. Called on `captureQueue`.
     private func updateFrameRateForWindow(open: Bool) {
-        // Off: leave the device at its default (full) rate. If Battery Saver was
-        // just switched off while throttled, the next window open restores it.
-        guard isBatterySaverEnabled else { return }
-        applyFrameRate(open ? nil : Self.batterySaverIdleFPS)
+        if open {
+            if isThrottled {
+                restoreFrameRate()
+                isThrottled = false
+            }
+        } else if isBatterySaverEnabled && !isThrottled {
+            isThrottled = throttleFrameRate(to: Self.batterySaverIdleFPS)
+        }
     }
 
-    /// Sets the sensor frame rate, or restores the active format's maximum when
-    /// `fps` is nil. Called on `captureQueue`. Any failure leaves the rate
-    /// unchanged — this is an optimisation, never a correctness requirement.
-    private func applyFrameRate(_ fps: Double?) {
-        guard let device = captureSession.inputs
-                .compactMap({ ($0 as? AVCaptureDeviceInput)?.device })
-                .first else { return }
-        let ranges = device.activeFormat.videoSupportedFrameRateRanges
-        guard let maxSupported = ranges.map(\.maxFrameRate).max() else { return }
-        let target = fps ?? maxSupported
-        guard ranges.contains(where: { $0.minFrameRate <= target && target <= $0.maxFrameRate }) else { return }
-        let duration = CMTime(value: 1, timescale: CMTimeScale(target.rounded()))
+    /// Lowers the sensor rate, remembering the device's current durations so
+    /// `restoreFrameRate` puts back exactly what was there. Returns false if the
+    /// active format cannot run at `fps` or the device could not be locked; any
+    /// failure leaves the rate unchanged — this is an optimisation only.
+    private func throttleFrameRate(to fps: Double) -> Bool {
+        guard let device = captureDevice,
+              device.activeFormat.videoSupportedFrameRateRanges
+                .contains(where: { $0.minFrameRate <= fps && fps <= $0.maxFrameRate })
+        else { return false }
         do {
             try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+            savedMinFrameDuration = device.activeVideoMinFrameDuration
+            savedMaxFrameDuration = device.activeVideoMaxFrameDuration
+            let duration = CMTime(value: 1, timescale: CMTimeScale(fps.rounded()))
             device.activeVideoMinFrameDuration = duration
             device.activeVideoMaxFrameDuration = duration
-            device.unlockForConfiguration()
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func restoreFrameRate() {
+        guard let device = captureDevice,
+              savedMinFrameDuration.isValid, savedMaxFrameDuration.isValid else { return }
+        do {
+            try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+            device.activeVideoMinFrameDuration = savedMinFrameDuration
+            device.activeVideoMaxFrameDuration = savedMaxFrameDuration
         } catch {
             // Keep the current rate.
         }
@@ -551,10 +628,12 @@ final class CaptureEngine: NSObject, ObservableObject {
 
     /// Polls device motion at 100 Hz for stride-apex and rotation-rate detection.
     ///
-    /// `down` = userAcceleration · gravity (positive = accelerating toward the
-    /// earth). The stride apex is a local MAXIMUM of `down` — see `ApexDetector`
-    /// for why a zero-crossing is the wrong event. The unsigned magnitude of
-    /// `userAcceleration` still drives the stillness test and telemetry.
+    /// `down` = −(userAcceleration · gravity), positive = accelerating toward the
+    /// earth — see `verticalDown` for why the negation is required. The stride
+    /// apex is a local MAXIMUM of `down` — see `ApexDetector` for why a
+    /// zero-crossing is the wrong event. The unsigned magnitude of
+    /// `userAcceleration`, smoothed by `StillnessFilter`, drives the stillness
+    /// test; the raw magnitude is recorded as telemetry.
     ///
     /// The rotation-rate check here is only a cheap pre-filter on the latch; the
     /// gate that actually rejects blurry frames runs at capture time in
@@ -575,29 +654,32 @@ final class CaptureEngine: NSObject, ObservableObject {
             let ua = motion.userAcceleration
             // Unsigned motion intensity — stillness test + telemetry.
             let netAccel = sqrt(ua.x * ua.x + ua.y * ua.y + ua.z * ua.z)
-            // Signed downward component. CoreMotion's gravity vector points toward
-            // the earth, so a positive dot product means accelerating downward.
-            let g = motion.gravity
-            let down = ua.x * g.x + ua.y * g.y + ua.z * g.z
+            // Signed downward kinematic acceleration (see `verticalDown` for the
+            // sign convention — userAcceleration is the accelerometer residual).
+            let down = Self.verticalDown(userAcceleration: ua, gravity: motion.gravity)
 
             let rr = motion.rotationRate
             let rotRate = sqrt(rr.x * rr.x + rr.y * rr.y + rr.z * rr.z)
             self.currentRotRate = rotRate
             let rotationTooFast = rotRate > self.rotationRateThreshold
 
-            let isApex: Bool = {
+            let (isApex, smoothedMagnitude): (Bool, Double) = {
                 self.motionLock.lock(); defer { self.motionLock.unlock() }
-                return self._apexDetector.feed(down: down, at: motion.timestamp)
+                return (self._apexDetector.feed(down: down, at: motion.timestamp),
+                        self._stillness.feed(netAccel))
             }()
-            let isStill = netAccel < self.stillnessThreshold
+            // Sustained quiet, not a single quiet sample (see StillnessFilter).
+            let isStill = smoothedMagnitude < self.stillnessThreshold
 
             // Latch a capture trigger. The capture-time gate makes the final call.
+            // An apex takes precedence: a stillness sample must not relabel a
+            // latched apex, or the capture log misattributes the trigger.
             if !rotationTooFast {
                 if isApex {
                     self.apogeeDetected = true
                     self.lastMotionTrigger = .apogee
                     DispatchQueue.main.async { self.apogeeCount += 1 }
-                } else if isStill {
+                } else if isStill && !self.apogeeDetected {
                     self.apogeeDetected = true
                     self.lastMotionTrigger = .stillness
                 }
@@ -713,6 +795,7 @@ final class CaptureEngine: NSObject, ObservableObject {
     }
 
     @objc private func sessionInterruptionEnded(_ notification: Notification) {
+        guard isConfigured else { return }
         print("[CaptureEngine] Interruption ended — restarting session")
         captureQueue.async { [weak self] in
             guard let self else { return }
@@ -724,6 +807,13 @@ final class CaptureEngine: NSObject, ObservableObject {
     }
 
     @objc private func sessionRuntimeError(_ notification: Notification) {
+        // Only restart a session that actually has a camera input. Restarting an
+        // input-less session just posts another runtime error — a tight loop that
+        // burned CPU on hosts with no camera.
+        guard isConfigured else {
+            print("[CaptureEngine] Runtime error on an unconfigured session — not restarting")
+            return
+        }
         print("[CaptureEngine] Runtime error — attempting restart")
         captureQueue.async { [weak self] in
             self?.captureSession.startRunning()

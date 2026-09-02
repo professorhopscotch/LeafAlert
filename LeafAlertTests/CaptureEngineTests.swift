@@ -1,4 +1,5 @@
 import XCTest
+import CoreMotion
 @testable import LeafAlert
 
 /// Tests for the hardware-free half of CaptureEngine: the stride-apex detector
@@ -58,6 +59,46 @@ final class CaptureEngineTests: XCTestCase {
         det.reset()
         _ = det.feed(down: 0.0, at: 0.03); _ = det.feed(down: 0.2, at: 0.04)
         XCTAssertTrue(det.feed(down: 0.0, at: 0.05), "reset must clear the refractory clock")
+    }
+
+    // MARK: - Sensor sign convention
+
+    /// Free fall is the one situation with an unambiguous answer: the phone
+    /// accelerates DOWNWARD at 1 g while the accelerometer reads zero, so
+    /// CoreMotion reports userAcceleration = −gravity. `down` must come out
+    /// positive. A detector fed the un-negated projection fires at heel-strike
+    /// (the bottom of the bounce) instead of the apex, and no synthetic-signal
+    /// test can see that — only this convention check can.
+    func testVerticalDownIsPositiveInFreeFall() {
+        let gravity = CMAcceleration(x: 0, y: 0, z: -1)         // face-up: earthward is −z
+        let freeFall = CMAcceleration(x: 0, y: 0, z: 1)         // userAcceleration = −gravity
+        XCTAssertEqual(CaptureEngine.verticalDown(userAcceleration: freeFall, gravity: gravity), 1.0, accuracy: 1e-9)
+    }
+
+    func testVerticalDownIsZeroAtRestAndOrientationInvariant() {
+        let rest = CMAcceleration(x: 0, y: 0, z: 0)
+        XCTAssertEqual(CaptureEngine.verticalDown(userAcceleration: rest, gravity: CMAcceleration(x: 0, y: 0, z: -1)), 0, accuracy: 1e-9)
+        // Same free-fall sample with the phone held upright (earthward is −y).
+        XCTAssertEqual(CaptureEngine.verticalDown(userAcceleration: CMAcceleration(x: 0, y: 1, z: 0),
+                                                  gravity: CMAcceleration(x: 0, y: -1, z: 0)), 1.0, accuracy: 1e-9)
+    }
+
+    // MARK: - StillnessFilter
+
+    func testStillnessRequiresSustainedQuietNotOneSample() {
+        var f = StillnessFilter(smoothing: 0.033, seed: 1.0)
+        // A brisk walk with one quiet sample (a zero-crossing) must NOT read as still.
+        for _ in 0..<50 { _ = f.feed(0.30) }
+        XCTAssertGreaterThan(f.feed(0.0), 0.08, "a single quiet sample must not count as stillness")
+        // Sustained quiet does.
+        var last = 1.0
+        for _ in 0..<120 { last = f.feed(0.0) }       // 1.2 s
+        XCTAssertLessThan(last, 0.08)
+    }
+
+    func testStillnessFilterSeedsHighSoAMovingStartIsNotStill() {
+        var f = StillnessFilter()
+        XCTAssertGreaterThan(f.feed(0.0), 0.08, "first sample alone must not read as still")
     }
 
     // MARK: - DutyCycle decision
