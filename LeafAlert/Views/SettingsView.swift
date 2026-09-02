@@ -25,6 +25,14 @@ struct SettingsView: View {
         }
     }
 
+    /// "1.2.0 (34)" from the bundle, so Settings never drifts from the build.
+    private static var versionString: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String
+        return build.map { "\(short) (\($0))" } ?? short
+    }
+
     var body: some View {
         Form {
             Section("Detection Sensitivity") {
@@ -61,7 +69,7 @@ struct SettingsView: View {
 
             Section("Battery") {
                 Toggle("Battery Saver Mode", isOn: $batterySaverEnabled)
-                Text("Reduces capture frequency to once every 3 seconds.")
+                Text("Captures at most once every \(Int(CaptureEngine.TuningDefaults.batterySaverInterval)) seconds instead of every \(Int(CaptureEngine.TuningDefaults.minCaptureInterval)), and idles the camera sensor between captures.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -107,7 +115,7 @@ struct SettingsView: View {
             }
 
             Section("About") {
-                LabeledContent("Version", value: "1.0.0")
+                LabeledContent("Version", value: Self.versionString)
                 Text("LeafAlert uses on-device machine learning to help identify toxic plants. No data ever leaves your device.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
