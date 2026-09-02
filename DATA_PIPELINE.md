@@ -394,7 +394,12 @@ baseline numbers so the next iteration's "never regress" gate has a reference.
   safe 5, sumac 0 — the sumac and safe queries were exhausted), 0 held-out leaks, the
   1,909 previously committed GBIF files re-matched the pool as `leak_pool` and were skipped.
   Pool after: ivy 3,277 · oak 2,796 · sumac 1,291 · safe 2,831 (10,195). Used for the
-  v9-data experiment (see ML_QUALITY.md).
+  v9-data experiment — **which regressed** (ivy recall 80 → 70, confident miss 3.8 → 5.7%;
+  see ML_QUALITY.md), so the commit was **reversed the same night**: the 804 files were
+  removed from the pool and their manifest rows pruned; the pool is back to 9,391 and
+  reproduces the shipped v9. The batch is still staged under `data_staging/gbif/` with
+  provenance. Curate it (score with v9 via `active_learning.py`, drop images without
+  leaf evidence) before committing again.
 
 ## Oversized originals (added 2026-09-02)
 

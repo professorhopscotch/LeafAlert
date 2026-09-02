@@ -212,6 +212,34 @@ exports far tighter: 100% top-1 agreement, mean |Δp| 0.0004. Command:
 .venv/bin/python scripts/evaluate_model.py --checkpoint <pth> --arch v5 --coreml <mlpackage>
 ```
 
+## Rejected experiment: v9-data (ConvNeXt-tiny + 799 more GBIF ivy/oak images)
+
+Hypothesis: v8's gain came from GBIF source diversity, so more of it for the two
+weakest classes should help v9 further. 400 poison_ivy + 400 poison_oak (+5 safe)
+US CC0/CC-BY images passed QA with zero held-out leakage and were committed;
+ConvNeXt-tiny was retrained with the identical recipe (30 epochs, seed 42).
+
+| Metric (held-out n=362, app thresholds) | **v9 (shipped)** | v9-data |
+|---|---|---|
+| Confident toxic→"safe" miss | **3.8% (10)** | 5.7% (15) |
+| Full-alert toxic recall | **95.4%** | 92.7% |
+| Toxic surfaced (alert + verify) | **96.2%** | 94.3% |
+| Safe→toxic false alarm (surfaced) | **16%** | 22% |
+| Overall accuracy | **84.3%** | 81.5% |
+| Per-class recall ivy / oak / sumac | **80 / 81 / 91** | 70 / 81 / 95 |
+| Blur k=15 confident miss | **6.5%** | 7.3% |
+
+**Rejected, and the pool commit was reversed** (the 804 files were removed from
+`TrainingData/` and their manifest rows pruned; they remain staged under
+`data_staging/gbif/` with provenance). Poison-ivy recall *fell* from 80% to 70%
+with 399 more ivy photos, which points at label/content noise in that batch
+(GBIF "Toxicodendron radicans" observations include bark, berries, winter vines
+and habitat shots that carry no leaf evidence) rather than at capacity or
+recipe. Before this batch is used again: score the staged images with v9
+(`scripts/active_learning.py`), look at the ones v9 calls safe with high
+confidence, and curate. The shipped v9 remains reproducible from the 9,391-image
+pool with the documented command.
+
 ## Rejected experiment: v9-B2 (EfficientNet-B2 backbone, same recipe/data)
 
 Hypothesis: v8's weak axis is ivy/oak separation (recall 62/69), so a stronger
