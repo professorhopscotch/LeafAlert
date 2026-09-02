@@ -377,6 +377,7 @@ final class CaptureEngine: NSObject, ObservableObject {
     private let motionLock = NSLock()
     private var _apogeeDetected = false
     private var _lastMotionTrigger: CaptureTrigger = .forced
+    private var _lastApexTimestamp: TimeInterval = 0
 
     private var apogeeDetected: Bool {
         get { motionLock.lock(); defer { motionLock.unlock() }; return _apogeeDetected }
@@ -389,6 +390,14 @@ final class CaptureEngine: NSObject, ObservableObject {
         set { motionLock.lock(); defer { motionLock.unlock() }; _lastMotionTrigger = newValue }
     }
 
+    /// CoreMotion timestamp (device uptime clock) of the apex that set the latch.
+    /// Logged next to the frame's presentation timestamp so the apex→shutter
+    /// phase can be measured offline (scripts/gait_check.py).
+    private var lastApexTimestamp: TimeInterval {
+        get { motionLock.lock(); defer { motionLock.unlock() }; return _lastApexTimestamp }
+        set { motionLock.lock(); defer { motionLock.unlock() }; _lastApexTimestamp = newValue }
+    }
+
     /// Whether the inference window is open (ready to capture a frame for ML).
     /// Accessed only on `captureQueue`.
     private var isInferenceWindowOpen = false
@@ -396,6 +405,10 @@ final class CaptureEngine: NSObject, ObservableObject {
     /// When the current inference window was opened. Used to enforce maxCaptureWindowDuration.
     /// Accessed only on `captureQueue`.
     private var captureWindowOpenedAt: Date = .distantPast
+
+    /// The apex that opened the current window (nil for stillness/forced).
+    /// Accessed only on `captureQueue`.
+    private var windowApexTimestamp: TimeInterval?
 
     /// Guards against sending a new frame while the previous one is still being processed.
     /// Accessed only on `captureQueue`.
@@ -688,6 +701,7 @@ final class CaptureEngine: NSObject, ObservableObject {
             // latched apex, or the capture log misattributes the trigger.
             if !rotationTooFast {
                 if isApex {
+                    self.lastApexTimestamp = motion.timestamp
                     self.apogeeDetected = true
                     self.lastMotionTrigger = .apogee
                     DispatchQueue.main.async { self.apogeeCount += 1 }
@@ -754,6 +768,7 @@ final class CaptureEngine: NSObject, ObservableObject {
             setInferenceWindow(open: false)
         case .openWindow(let trigger):
             lastTrigger = trigger
+            windowApexTimestamp = trigger == .apogee ? lastApexTimestamp : nil
             setInferenceWindow(open: true)
         }
     }
@@ -884,10 +899,16 @@ extension CaptureEngine: AVCaptureVideoDataOutputSampleBufferDelegate {
             trigger: lastTrigger,
             timestamp: Date()
         )
-        DataRecorder.shared.logEvent(
-            "capture",
-            details: "trigger=\(lastTrigger.rawValue) accel=\(String(format: "%.3f", previousNetAccel)) rot=\(String(format: "%.3f", currentRotRate))"
-        )
+        // `pts` and `apex_ts` are both on the device uptime clock, so their
+        // difference is the apex→shutter phase, free of delivery latency.
+        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer).seconds
+        var details = "trigger=\(lastTrigger.rawValue) accel=\(String(format: "%.3f", previousNetAccel)) rot=\(String(format: "%.3f", currentRotRate))"
+        details += String(format: " pts=%.4f window_ms=%.0f", pts,
+                          Date().timeIntervalSince(captureWindowOpenedAt) * 1000)
+        if let apex = windowApexTimestamp {
+            details += String(format: " apex_ts=%.4f", apex)
+        }
+        DataRecorder.shared.logEvent("capture", details: details)
         onFrameCaptured?(pixelBuffer, context)
     }
 }

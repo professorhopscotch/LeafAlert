@@ -8,6 +8,7 @@ import UIKit
 ///   Documents/recordings/<session_id>/
 ///     ├── video.mov              — continuous H.264 video at native frame rate
 ///     ├── imu.csv                — 100 Hz IMU samples (accel, gyro, attitude)
+///                                 + motion_ts on the device uptime clock
 ///     ├── events.csv             — capture triggers, detections, gate decisions
 ///     └── metadata.json          — session info, settings, model version
 ///
@@ -131,7 +132,7 @@ final class DataRecorder {
 
         // Set up IMU CSV
         let imuURL = folder.appendingPathComponent("imu.csv")
-        let imuHeader = "timestamp_s,accel_x,accel_y,accel_z,user_accel_x,user_accel_y,user_accel_z,gravity_x,gravity_y,gravity_z,rot_x,rot_y,rot_z,roll,pitch,yaw\n"
+        let imuHeader = "timestamp_s,accel_x,accel_y,accel_z,user_accel_x,user_accel_y,user_accel_z,gravity_x,gravity_y,gravity_z,rot_x,rot_y,rot_z,roll,pitch,yaw,motion_ts\n"
         try? imuHeader.data(using: .utf8)?.write(to: imuURL)
         imuFileHandle = try? FileHandle(forWritingTo: imuURL)
         imuFileHandle?.seekToEndOfFile()
@@ -238,7 +239,7 @@ final class DataRecorder {
         guard isRecording else { return }
         let elapsed = Date().timeIntervalSince(startTime)
         let row = String(
-            format: "%.4f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f\n",
+            format: "%.4f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.5f,%.4f\n",
             elapsed,
             motion.userAcceleration.x + motion.gravity.x,
             motion.userAcceleration.y + motion.gravity.y,
@@ -254,7 +255,8 @@ final class DataRecorder {
             motion.rotationRate.z,
             motion.attitude.roll,
             motion.attitude.pitch,
-            motion.attitude.yaw
+            motion.attitude.yaw,
+            motion.timestamp   // device uptime clock, pairs with capture `pts`/`apex_ts`
         )
         ioQueue.async { [self] in
             if let data = row.data(using: .utf8) {

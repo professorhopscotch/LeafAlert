@@ -92,9 +92,12 @@ final class AppState: ObservableObject {
                 }
 
                 guard let result else { return }
+                let loggedSeverity = ToxicityThresholds.severity(plantType: result.plantType,
+                                                                 confidence: result.confidence,
+                                                                 sensitivity: Float(self.sensitivityThreshold))
                 DataRecorder.shared.logEvent(
                     "detection",
-                    details: "class=\(result.plantType) conf=\(String(format: "%.3f", result.confidence))"
+                    details: "class=\(result.plantType) conf=\(String(format: "%.3f", result.confidence)) sev=\(loggedSeverity) trigger=\(captureContext.trigger.rawValue)"
                 )
                 let imageData = self.imageConverter.jpegData(from: pixelBuffer)
                 DispatchQueue.main.async {

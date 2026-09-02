@@ -713,7 +713,7 @@ def main():
 
     # ── Model ──
     pretrained = not (args.no_pretrained or args.smoke)  # smoke stays offline
-    print(f"\nBuilding EfficientNet-B0 + '{args.head}' head "
+    print(f"\nBuilding {args.backbone} + '{args.head}' head "
           f"(pretrained={pretrained})...")
     model = PlantDetectorV5(
         backbone=args.backbone,
