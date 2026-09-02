@@ -5,7 +5,37 @@ toxic-plant detector is a **false negative** (a poison plant called safe), so
 every metric and threshold here is weighted toward **toxic-recall**, not overall
 accuracy.
 
-## Shipped model: v8 (data-expanded, no distillation, non-plant-aware, source-diversified)
+## Shipped model: v9 (ConvNeXt-tiny backbone, same v8 data and recipe)
+
+The current shipped `PlantDetector.mlpackage` is **v9**: `train_v5.py --backbone
+convnext_tiny --epochs 30` on the unchanged v8 pool (9,391 images), exported
+through the same parity contract. Checkpoint `checkpoints/student_v9_convnext_tiny.pth`
+(+ `.json` sidecar recording the backbone). Every figure below is
+`scripts/operating_point.py` on the frozen held-out set with the app's thresholds
+(ivy/oak 0.40, sumac 0.52 — unchanged).
+
+| Metric (held-out n=362, app thresholds) | **v8 (shipped)** | **v9 (ConvNeXt-tiny)** |
+|---|---|---|
+| Confident toxic→"safe" miss | 8.0% (21) | 3.8% (10) |
+| Full-alert toxic recall | 89.7% | 95.4% |
+| Toxic surfaced (alert + verify) | 92.0% | 96.2% |
+| Safe→toxic false alarm (surfaced) | 24% | 16% |
+| Overall accuracy | 74.0% | 84.3% |
+| Per-class recall (argmax) ivy / oak / sumac | 62 / 69 / 86 | 80 / 81 / 91 |
+| Blur k=15 toxic→safe flip (this kernel) | 8.7% | 4.0% |
+| OOD non-plant → full toxic alert (n=200) | 7.0% | 8.0% |
+| Torch↔Core ML top-1 agreement / mean |Δp| | 96.4% / 0.015 | 100.0% / 0.000 |
+
+Also: under motion blur k=15 the confident miss is 6.5% (v8 12.2%) and
+full-alert recall 91.2% (v8 80.5%). The dangerous error halves and every
+plant-axis metric improves with margin; the two costs are a **53 MB** bundle
+(v8: 7.8 MB; ~4 ms per frame on Apple accelerators vs 0.5 ms — irrelevant at one
+capture per second) and OOD full-alert 8.0% vs 7.0% (2 images on n=200, within
+noise, nuisance axis). A threshold sweep on v9 showed raising ivy/oak to 0.50
+would cut full-alert false alarms 15% → 12% at −2.7 pp full-alert recall; for a
+safety app that trade was not taken. Provenance and the B2 rejection are below.
+
+## Previous shipped model: v8 (data-expanded, no distillation, non-plant-aware, source-diversified)
 
 The current shipped `PlantDetector.mlpackage` is the **v8** model: EfficientNet-B0
 (light head, no distillation), trained by `scripts/train_v5.py` on a **9,391-image**
@@ -173,9 +203,10 @@ models under one kernel, not across them.)
 The headline numbers are torch-side. The exported Core ML model (fp16, baked
 normalize + softmax) agrees with torch on the held-out set at **96.4% top-1
 (349/362), mean |Δp| 0.015, max 0.18**; Core ML accuracy is 73.2% vs torch
-74.0%. That drift is the floor for this export path — the rejected B2 export
-showed the same 96.4% / 0.016 — so a candidate whose parity is noticeably worse
-has an export problem, not a model problem. Command:
+74.0%. That drift is the floor for the EfficientNet export path — the rejected B2
+export showed the same 96.4% / 0.016 — so a candidate whose parity is noticeably
+worse has an export problem, not a model problem. The shipped v9 (ConvNeXt-tiny)
+exports far tighter: 100% top-1 agreement, mean |Δp| 0.0004. Command:
 
 ```bash
 .venv/bin/python scripts/evaluate_model.py --checkpoint <pth> --arch v5 --coreml <mlpackage>
@@ -202,8 +233,7 @@ backbone at the same 224 input should help without touching the parity contract.
 traded oak/safe recall for ivy recall. With ~7.4k training images the extra
 capacity is not the bottleneck — data diversity was (v8), and calibration is
 already good. Checkpoint kept for reference: `checkpoints/student_v9_effb2.pth`
-(sidecar records the backbone). A ConvNeXt-tiny candidate is reported below
-when its run completes.
+(sidecar records the backbone). The ConvNeXt-tiny candidate that followed shipped as v9 (top of this file).
 
 ## Rejected experiment: v7 (seasonal rebalance) — DO NOT retry blindly
 

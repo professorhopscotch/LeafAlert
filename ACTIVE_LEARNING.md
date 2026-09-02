@@ -22,7 +22,7 @@ PY=/Users/burkley/Documents/claude/LeafAlert/.venv/bin/python
 | **Held-out FREEZE** | `TrainingData/Testing/` (n=362) is frozen. **Never** add to it, never train on it, never tune on it. |
 | **Train pool** | New data lands ONLY in `TrainingData/<class>/`, and ONLY via `scripts/dataset_qa.py --commit`. |
 | **Preprocessing parity** | Squash-resize to 224×224 (`Resize((224,224))`, **no** center crop) → ImageNet normalize. Export bakes normalize + softmax; the model takes raw 0–255 RGB. `active_learning.py` imports the transform from `train_v5` and asserts parity at runtime. |
-| **Shipped model** | v6 = `PlantDetectorV5` (EfficientNet-B0, `head="linear"`), weights `checkpoints/student_v6_nonplant.pth`. |
+| **Shipped model** | v9 = `PlantDetectorV5` with a **ConvNeXt-tiny** backbone (`head="linear"`), weights `checkpoints/student_v9_convnext_tiny.pth` (+ `.json` sidecar). Retrain with the SAME backbone: `train_v5.py --backbone convnext_tiny --epochs 30`. `load_v5()` rebuilds the recorded architecture, so evaluation tooling never has to guess. |
 
 **Current pool (baseline for this loop):** ivy 1728 · oak 1296 · sumac 669 ·
 safe 2426 = **6119** train, **362** frozen held-out.
@@ -320,7 +320,7 @@ Retrain only when the pool has meaningfully grown (see cadence). This is the
 heavy job — hours on MPS/GPU.
 
 ```bash
-$PY scripts/train_v5.py --epochs 40
+$PY scripts/train_v5.py --backbone convnext_tiny --epochs 30
 ```
 
 Outputs `checkpoints/plant_detector_v5.pth` and re-exports

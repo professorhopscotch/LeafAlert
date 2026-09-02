@@ -276,7 +276,8 @@ echo "held-out (must be 362): $(find TrainingData/Testing -type f \( -iname '*.j
 
 ## Step 4 — Retrain (`train_v5.py`) — HEAVY, run on GPU/MPS
 
-Direct (no-distillation) EfficientNet-B0 + light head, inverse-frequency class
+Direct (no-distillation) timm backbone (`--backbone`; v9 ships **ConvNeXt-tiny**,
+v5–v8 were EfficientNet-B0) + light head, inverse-frequency class
 weights + label smoothing, and the **field-failure augmentation** that targets
 the 58% motion-blur cliff (directional motion blur, defocus/Gaussian blur,
 random-erasing occlusion). The split is source/observation-disjoint by
