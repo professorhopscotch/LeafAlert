@@ -43,6 +43,12 @@ final class AppState: ObservableObject {
     // MARK: - Init
 
     init() {
+        // Heal any out-of-range value an older debug build may have persisted
+        // (its slider allowed 0.10–0.95); see ToxicityThresholds.sensitivityRange.
+        let range = ToxicityThresholds.sensitivityRange
+        if !range.contains(sensitivityThreshold) {
+            sensitivityThreshold = min(max(sensitivityThreshold, range.lowerBound), range.upperBound)
+        }
         observeSettingsChanges()
         forwardEngineChanges()
     }
@@ -127,6 +133,12 @@ final class AppState: ObservableObject {
     /// Stops the patrol pipeline.
     func stopPatrol() {
         captureEngine.stop()
+        // A session recording is tied to the patrol: finalize it now so the .mov
+        // is playable and metadata.json is written, instead of leaving an
+        // unfinalized file behind when the user taps Stop out of habit.
+        if DataRecorder.shared.isRecording {
+            DataRecorder.shared.stop()
+        }
         detectionExpiryTask?.cancel()
         detectionExpiryTask = nil
         lastDetection = nil
@@ -183,7 +195,10 @@ final class AppState: ObservableObject {
     /// nested engine properties (e.g. `appState.captureEngine.pipelineActive`) update correctly.
     private func forwardEngineChanges() {
         captureEngine.objectWillChange
-            .receive(on: DispatchQueue.main)
+            // The engine publishes motion telemetry at ~10 Hz, and every view
+            // observing AppState re-evaluates on each forward. Cap it at 5 Hz —
+            // ample for debug readouts — to halve main-thread churn on patrol.
+            .throttle(for: .milliseconds(200), scheduler: DispatchQueue.main, latest: true)
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &engineCancellables)
     }

@@ -65,6 +65,13 @@ enum ToxicityThresholds {
     /// The neutral sensitivity value at which the base thresholds apply.
     static let neutralSensitivity: Float = 0.50
 
+    /// Allowed range for the user-facing sensitivity slider. The Settings slider
+    /// AND the debug Live Controls slider must both use this: the debug one used
+    /// to allow 0.10–0.95, so a single flick persisted a value the Settings
+    /// slider could not even display and that silently over- or de-sensitised
+    /// every later patrol until someone noticed.
+    static let sensitivityRange: ClosedRange<Double> = 0.3...0.8
+
     /// Confidence band immediately below the alert bar that is still surfaced as
     /// `.uncertain` instead of ignored — so a near-miss toxic plant is never a
     /// silent all-clear.

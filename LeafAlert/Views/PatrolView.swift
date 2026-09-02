@@ -217,10 +217,27 @@ struct PatrolView: View {
                     UIScreen.main.brightness = brightness
                 }
                 UIApplication.shared.isIdleTimerDisabled = false
+                // A recording cannot continue in the background (the camera is
+                // interrupted), so finalize it now rather than leave an
+                // unplayable file. Only on .background — .inactive also fires
+                // for transient overlays like a notification banner.
+                if phase == .background, DataRecorder.shared.isRecording {
+                    DataRecorder.shared.stop()
+                }
             @unknown default:
                 break
             }
         }
+        #if DEBUG
+        // Test hook: `-autoStartPatrol 1` starts the patrol on appear so the
+        // simulator smoke test can exercise the live patrol UI (including the
+        // no-camera degradation path) without a tap.
+        .onAppear {
+            if UserDefaults.standard.bool(forKey: "autoStartPatrol"), !appState.isPatrolling {
+                startPatrol()
+            }
+        }
+        #endif
         .onDisappear {
             // Only stop patrol when truly navigating away, not when a sheet is presented.
             // Sheets (like AR overlay) trigger onDisappear but the user hasn't left patrol.

@@ -33,8 +33,14 @@ struct DebugCaptureReviewView: View {
                 rotHistory.removeFirst(rotHistory.count - maxHistorySize)
             }
         }
-        .onChange(of: appState.captureEngine.totalFramesCaptured) { _, _ in
-            loadFrames()
+        // Refresh the gallery on a bounded cadence instead of on every capture:
+        // listing and parsing the whole frame directory on each new frame ran on
+        // the main thread at the capture rate, right on top of the capture timer.
+        .task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                loadFrames()
+            }
         }
         .fullScreenCover(item: $selectedFrame) { frame in
             FrameFullscreenView(frame: frame)
@@ -266,8 +272,14 @@ struct DebugCaptureReviewView: View {
             .clipShape(Capsule())
     }
 
+    /// Lists frames off the main thread and publishes the result.
     private func loadFrames() {
-        frames = DebugFrameSaver.shared.listFrames()
+        Task {
+            let list = await Task.detached(priority: .utility) {
+                DebugFrameSaver.shared.listFrames()
+            }.value
+            frames = list
+        }
     }
 }
 

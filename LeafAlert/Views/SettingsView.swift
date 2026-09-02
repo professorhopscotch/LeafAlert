@@ -30,7 +30,7 @@ struct SettingsView: View {
             Section("Detection Sensitivity") {
                 VStack(alignment: .leading) {
                     Text("Alert Sensitivity: \(sensitivityLabel)")
-                    Slider(value: $sensitivityThreshold, in: 0.3...0.8, step: 0.05)
+                    Slider(value: $sensitivityThreshold, in: ToxicityThresholds.sensitivityRange, step: 0.05)
                 }
                 Text("More sensitive catches more toxic plants but raises false alarms; less sensitive is quieter but can miss plants. Near-misses are always shown as \u{201C}possible — verify visually.\u{201D} No setting is a substitute for looking.")
                     .font(.caption)

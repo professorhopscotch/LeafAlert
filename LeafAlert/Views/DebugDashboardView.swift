@@ -6,23 +6,24 @@ import AVFoundation
 struct DebugDashboardView: View {
     @EnvironmentObject private var appState: AppState
 
+    // No NavigationStack of its own: this view is always PUSHED from Home's
+    // stack, and a nested stack inside a navigationDestination makes SwiftUI
+    // drop the push — routing to Debug silently landed on Home.
     var body: some View {
-        NavigationStack {
-            List {
-                engineDiagnosticsSection
-                mlOutputSection
-                controlsSection
-                frameCaptureSection
-                dataRecordingSection
-                actionsSection
-            }
-            .navigationTitle("Debug")
-            .navigationBarTitleDisplayMode(.inline)
-            // Refresh the cached count here rather than from `body`: reading it is
-            // now an O(1) in-memory load, and the directory stat happens once on
-            // appear instead of at the ~10 Hz rate `body` re-evaluates.
-            .onAppear { DebugFrameSaver.shared.refreshFrameCount() }
+        List {
+            engineDiagnosticsSection
+            mlOutputSection
+            controlsSection
+            frameCaptureSection
+            dataRecordingSection
+            actionsSection
         }
+        .navigationTitle("Debug")
+        .navigationBarTitleDisplayMode(.inline)
+        // Refresh the cached count here rather than from `body`: reading it is
+        // now an O(1) in-memory load, and the directory stat happens once on
+        // appear instead of at the ~10 Hz rate `body` re-evaluates.
+        .onAppear { DebugFrameSaver.shared.refreshFrameCount() }
     }
 
     // MARK: - Section 1: Engine Diagnostics
@@ -220,6 +221,19 @@ struct DebugDashboardView: View {
 
     private var controlsSection: some View {
         Section("Live Controls") {
+            // These gates are in-memory and live: a tweak changes the running
+            // patrol immediately and persists until relaunch (never to disk).
+            // Defaults are shown beside each value; Reset restores all of them.
+            HStack {
+                Text("Live-only tuning · resets on relaunch")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Reset to defaults") {
+                    appState.captureEngine.resetTuningToDefaults()
+                }
+                .font(.caption)
+            }
             // Sensitivity threshold
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
@@ -229,7 +243,7 @@ struct DebugDashboardView: View {
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                 }
-                Slider(value: $appState.sensitivityThreshold, in: 0.1...0.95, step: 0.05)
+                Slider(value: $appState.sensitivityThreshold, in: ToxicityThresholds.sensitivityRange, step: 0.05)
                     .tint(.orange)
             }
 
@@ -237,6 +251,8 @@ struct DebugDashboardView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text("Capture Cooldown")
+                    Text(String(format: "(default %.1fs)", CaptureEngine.TuningDefaults.minCaptureInterval))
+                        .font(.caption2).foregroundStyle(.tertiary)
                     Spacer()
                     Text(String(format: "%.1fs", appState.captureEngine.minCaptureInterval))
                         .monospacedDigit()
@@ -255,6 +271,8 @@ struct DebugDashboardView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text("Forced Capture Interval")
+                    Text(String(format: "(default %.0fs)", CaptureEngine.TuningDefaults.forcedCaptureInterval))
+                        .font(.caption2).foregroundStyle(.tertiary)
                     Spacer()
                     Text(String(format: "%.0fs", appState.captureEngine.forcedCaptureInterval))
                         .monospacedDigit()
@@ -273,6 +291,8 @@ struct DebugDashboardView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text("Stillness Threshold")
+                    Text(String(format: "(default %.3fg)", CaptureEngine.TuningDefaults.stillnessThreshold))
+                        .font(.caption2).foregroundStyle(.tertiary)
                     Spacer()
                     Text(String(format: "%.3fg", appState.captureEngine.stillnessThreshold))
                         .monospacedDigit()
@@ -291,6 +311,8 @@ struct DebugDashboardView: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text("Rotation Rate Limit")
+                    Text(String(format: "(default %.0f°/s)", CaptureEngine.TuningDefaults.rotationRateThreshold * 180.0 / .pi))
+                        .font(.caption2).foregroundStyle(.tertiary)
                     Spacer()
                     Text(String(format: "%.0f°/s", appState.captureEngine.rotationRateThreshold * 180.0 / .pi))
                         .monospacedDigit()
@@ -346,6 +368,13 @@ struct DebugDashboardView: View {
     // MARK: - Section 4b: Data Recording
 
     @State private var recordingTick = 0
+    /// Cached session list. `listSessions()` walks two directory trees (one
+    /// possibly on iCloud behind a security scope) and recursively sizes every
+    /// session — far too heavy for `body`, which re-evaluates at up to 5 Hz on
+    /// patrol. Refreshed on appear and whenever a recording starts/stops/deletes.
+    @State private var sessions: [DataRecorder.SessionInfo] = []
+    /// Live size of the in-progress recording, polled at 1 Hz off the main thread.
+    @State private var liveSessionSize: Int64 = 0
 
     /// Guards "Force Capture Now" against re-entrancy: while a force is in
     /// flight, repeated taps must not re-read the already-forced (0.01s)
@@ -369,7 +398,7 @@ struct DebugDashboardView: View {
                 HStack {
                     Text("Session size")
                     Spacer()
-                    Text(formatBytes(recorder.sessionFolderSize))
+                    Text(formatBytes(liveSessionSize))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                 }
@@ -407,8 +436,7 @@ struct DebugDashboardView: View {
                     .foregroundStyle(.secondary)
             }
 
-            // Sessions list
-            let sessions = recorder.listSessions()
+            // Sessions list (cached — see `sessions`)
             if !sessions.isEmpty {
                 Text("Sessions (\(sessions.count))")
                     .font(.caption.bold())
@@ -441,7 +469,28 @@ struct DebugDashboardView: View {
                 }
             }
         }
-        .id(recordingTick) // force refresh on tick
+        .onAppear { refreshSessions() }
+        .onChange(of: recordingTick) { _, _ in refreshSessions() }
+        .task(id: recordingTick) {
+            // Poll the live session size at 1 Hz while recording. This is a
+            // recursive directory walk that used to run on every body evaluation.
+            while !Task.isCancelled, recorder.isRecording {
+                liveSessionSize = await Task.detached(priority: .utility) {
+                    DataRecorder.shared.sessionFolderSize
+                }.value
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+            }
+        }
+    }
+
+    /// Lists sessions off the main thread and publishes the result.
+    private func refreshSessions() {
+        Task {
+            let list = await Task.detached(priority: .utility) {
+                DataRecorder.shared.listSessions()
+            }.value
+            sessions = list
+        }
     }
 
     private var recorder: DataRecorder { DataRecorder.shared }
@@ -558,6 +607,6 @@ struct DebugDashboardView: View {
 }
 
 #Preview {
-    DebugDashboardView()
+    NavigationStack { DebugDashboardView() }
         .environmentObject(AppState())
 }

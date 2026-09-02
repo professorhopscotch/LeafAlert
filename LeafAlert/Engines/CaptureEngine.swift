@@ -190,12 +190,35 @@ final class CaptureEngine: NSObject, ObservableObject {
 
     private let configLock = NSLock()
 
-    private var _minCaptureInterval: TimeInterval = 1.0
-    private var _batterySaverInterval: TimeInterval = 4.0
-    private var _maxCaptureWindowDuration: TimeInterval = 1.5
-    private var _forcedCaptureInterval: TimeInterval = 4.0
-    private var _stillnessThreshold: Double = 0.08
-    private var _rotationRateThreshold: Double = 1.5  // rad/s — reject captures above this
+    /// Documented defaults for the live-tunable gates. The debug dashboard shows
+    /// these beside each slider and can restore them. They live in memory only —
+    /// never persisted — so every app launch starts from here.
+    enum TuningDefaults {
+        static let minCaptureInterval: TimeInterval = 1.0
+        static let batterySaverInterval: TimeInterval = 4.0
+        static let maxCaptureWindowDuration: TimeInterval = 1.5
+        static let forcedCaptureInterval: TimeInterval = 4.0
+        static let stillnessThreshold: Double = 0.08
+        static let rotationRateThreshold: Double = 1.5   // rad/s ≈ 86°/s
+    }
+
+    /// Restores every live-tunable gate to its documented default, so a debug
+    /// tweak cannot linger into a real patrol without an obvious way back.
+    func resetTuningToDefaults() {
+        minCaptureInterval = TuningDefaults.minCaptureInterval
+        batterySaverInterval = TuningDefaults.batterySaverInterval
+        maxCaptureWindowDuration = TuningDefaults.maxCaptureWindowDuration
+        forcedCaptureInterval = TuningDefaults.forcedCaptureInterval
+        stillnessThreshold = TuningDefaults.stillnessThreshold
+        rotationRateThreshold = TuningDefaults.rotationRateThreshold
+    }
+
+    private var _minCaptureInterval: TimeInterval = TuningDefaults.minCaptureInterval
+    private var _batterySaverInterval: TimeInterval = TuningDefaults.batterySaverInterval
+    private var _maxCaptureWindowDuration: TimeInterval = TuningDefaults.maxCaptureWindowDuration
+    private var _forcedCaptureInterval: TimeInterval = TuningDefaults.forcedCaptureInterval
+    private var _stillnessThreshold: Double = TuningDefaults.stillnessThreshold
+    private var _rotationRateThreshold: Double = TuningDefaults.rotationRateThreshold
     private var _isBatterySaverEnabled = false
 
     /// Minimum interval between captures (cooldown). Camera stays off during this period.
